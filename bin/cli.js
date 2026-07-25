@@ -49,6 +49,7 @@ OPTIONS:
     --help          Print this help message and exit
     --version       Print the version number and exit
     --debug         Enable verbose logging to stderr
+    --model=<name>  Override the embedding model (default: BAAI/bge-small-en-v1.5)
 
 EXAMPLES:
     turbocode-mcp
@@ -98,6 +99,15 @@ function main(options = {}) {
 
     const debug = flags.has('--debug');
 
+    // Extract --model=<name> if provided
+    let modelArg = null;
+    for (const arg of argv) {
+        if (arg.startsWith('--model=')) {
+            modelArg = arg;
+            break;
+        }
+    }
+
     // Check Python environment
     if (!fsImpl.existsSync(pythonExecutable)) {
         logFn('Python environment not found.');
@@ -120,7 +130,9 @@ function main(options = {}) {
     }
 
     // Spawn the Python MCP server with inherited stdio
-    const serverArgs = debug ? [serverScript, '--debug'] : [serverScript];
+    const serverArgs = [serverScript];
+    if (debug) serverArgs.push('--debug');
+    if (modelArg) serverArgs.push(modelArg);
     const mcpProcess = spawnImpl(pythonExecutable, serverArgs, {
         stdio: 'inherit',
         env: { ...env },

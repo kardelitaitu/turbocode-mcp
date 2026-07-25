@@ -12,6 +12,7 @@ import sys
 import json
 import time
 import random
+import subprocess
 import signal as sig_module
 import threading
 from collections import deque
@@ -37,7 +38,7 @@ CHECK_INTERVAL = 60  # seconds between idle checks
 
 # Lazy-loaded globals
 MODEL_NAME: str = "BAAI/bge-small-en-v1.5"
-model: SentenceTransformer | None = None
+model: object | None = None  # _ModelClient instance or None
 index: IdMapIndex | None = None
 meta: dict[str, dict] = {}
 store: dict[int, dict] = {}
@@ -83,30 +84,85 @@ def debug(msg: str) -> None:
 # ═══════════════════════════════════════════════════════════════
 
 
-def ensure_model() -> None:
-    """Load the embedding model on first use (thread-safe)."""
+class _ModelClient:
+    """Manages a subprocess that runs fastembed, keeping model memory
+    isolated from the MCP server. Provides an encode() interface
+    compatible with the old direct model API."""
+
+    def __init__(self, model_name: str):
+        self._model_name = model_name
+        self._lock = threading.Lock()
+        self._next_id = 0
+        self._proc: subprocess.Popen | None = None
+        self._start()
+
+    def _start(self) -> None:
+        embed_script = os.path.join(os.path.dirname(__file__), "embed_service.py")
+        self._proc = subprocess.Popen(
+            [sys.executable, embed_script, self._model_name],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
+        if self._proc.poll() is not None:
+            raise RuntimeError(
+                "Embed subprocess exited immediately (check fastembed install)"
+            )
+
+    def encode(self, texts: list[str], **kwargs) -> np.ndarray:
+        with self._lock:
+            if self._proc is None or self._proc.poll() is not None:
+                log("Restarting embed subprocess...")
+                self._start()
+            req_id = self._next_id
+            self._next_id += 1
+            msg = json.dumps({"id": req_id, "texts": texts}, default=str)
+            self._proc.stdin.write(msg + "\n")
+            self._proc.stdin.flush()
+            resp_line = self._proc.stdout.readline()
+            if not resp_line:
+                raise RuntimeError("Embed subprocess died unexpectedly")
+            resp = json.loads(resp_line.strip())
+            if "error" in resp:
+                raise RuntimeError(f"Embedding error: {resp['error']}")
+            return np.array(resp["vectors"], dtype=np.float32)
+
+    def stop(self) -> None:
+        with self._lock:
+            if self._proc is not None:
+                try:
+                    self._proc.stdin.write(
+                        json.dumps({"type": "shutdown"}) + "\n"
+                    )
+                    self._proc.stdin.flush()
+                except Exception:
+                    pass
+                try:
+                    self._proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        self._proc.kill()
+                    except Exception:
+                        pass
+                self._proc = None
+
+
+def ensure_model() -> object:
+    """Lazy-load the embedding model via subprocess (thread-safe)."""
     global model
     if model is not None:
-        return
+        return model
     with load_lock:
         if model is not None:
-            return
+            return model
         try:
-            from fastembed import TextEmbedding
-        except ImportError:
-            log("ERROR: fastembed not installed. Please run: npm install -g turbocode-mcp")
-            sys.exit(1)
-        log("Loading embedding model (first call)...")
-
-        class _EmbeddingWrapper:
-            """Wraps fastembed's generator-based API into sentence-transformers
-            style encode() for backward-compatible mocks."""
-            def __init__(self, inner):
-                self._inner = inner
-            def encode(self, texts, **_kw):
-                return np.array(list(self._inner.embed(texts)))
-
-        model = _EmbeddingWrapper(TextEmbedding(model_name=MODEL_NAME))
+            model = _ModelClient(MODEL_NAME)
+        except Exception as e:
+            log(f"ERROR: Failed to start embed subprocess: {e}")
+            raise
+    return model
 
 
 def ensure_index() -> None:
@@ -160,6 +216,7 @@ def validate_imports() -> None:
     for mod_name, import_name in [
         ("fastmcp", "fastmcp"),
         ("numpy", "numpy"),
+        ("fastembed", "fastembed"),
     ]:
         try:
             __import__(import_name)
@@ -591,7 +648,7 @@ def _load_gitignore_specs(root: str) -> list[tuple[str, pathspec.PathSpec]]:
         if os.path.isfile(gi):
             try:
                 with open(gi, "r") as f:
-                    spec = pathspec.PathSpec.from_lines("gitwildmatch", f)
+                    spec = pathspec.PathSpec.from_lines("gitignore", f)
                 specs.append((current, spec))
             except Exception:
                 pass
@@ -908,7 +965,11 @@ def main() -> None:
     # Handle graceful shutdown signals
     def handle_signal(signum, frame):
         log(f"Received signal {signum}. Persisting and shutting down...")
-        # Wait up to 5s for the worker to finish its batch, then persist
+        if model is not None and isinstance(model, _ModelClient):
+            try:
+                model.stop()
+            except Exception:
+                pass
         if index_lock.acquire(timeout=5):
             try:
                 _persist_locked()

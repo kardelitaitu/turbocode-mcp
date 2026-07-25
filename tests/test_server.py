@@ -280,17 +280,17 @@ class TestFileIndexing:
 
 class TestLazyLoading:
     def test_ensure_model_loads_on_first_call(self, mocker):
-        mock_class = mocker.patch("fastembed.TextEmbedding")
-
+        mocker.patch.object(server._ModelClient, '_start')
         server.ensure_model()
-        mock_class.assert_called_once_with(model_name="BAAI/bge-small-en-v1.5")
-        assert server.model is not None
+        assert isinstance(server.model, server._ModelClient)
+        assert server.model._model_name == "BAAI/bge-small-en-v1.5"
 
     def test_ensure_model_does_not_reload(self, mocker):
-        mock_class = mocker.patch("fastembed.TextEmbedding")
+        mocker.patch.object(server._ModelClient, '_start')
         server.ensure_model()
+        model_id = id(server.model)
         server.ensure_model()
-        assert mock_class.call_count == 1
+        assert id(server.model) == model_id
 
     def test_ensure_index_creates_empty(self):
         server.ensure_index()
@@ -314,7 +314,7 @@ class TestLazyLoading:
         assert server.index is not None
 
     def test_ensure_resources_loads_both(self, mocker):
-        mocker.patch("fastembed.TextEmbedding")
+        mocker.patch.object(server._ModelClient, '_start')
         mocker.patch("server.IdMapIndex.load")
 
         server.ensure_resources()
@@ -1178,7 +1178,7 @@ class TestSearchCodebaseModelFailure:
 
 class TestEnsureResourcesFailure:
     def test_model_load_failure_propagates(self, mocker):
-        mocker.patch("fastembed.TextEmbedding", side_effect=RuntimeError("download failed"))
+        mocker.patch.object(server._ModelClient, '_start', side_effect=RuntimeError("download failed"))
         with pytest.raises(RuntimeError, match="download failed"):
             server.ensure_model()
 
@@ -1554,16 +1554,14 @@ class TestPersistAllPartialFailure:
 
 class TestEnsureModelThreadSafety:
     def test_concurrent_ensure_model_loads_once(self, mocker):
-        model_instance = mocker.MagicMock()
-        model_instance.encode.return_value = np.random.rand(1, 384).astype(np.float32)
-        mock_ctr = [0]
+        start_ctr = [0]
 
-        def slow_constructor(*a, **kw):
-            mock_ctr[0] += 1
+        def slow_start(self):
+            start_ctr[0] += 1
             time.sleep(0.05)
-            return model_instance
+            self._proc = None
 
-        mocker.patch("fastembed.TextEmbedding", side_effect=slow_constructor)
+        mocker.patch.object(server._ModelClient, '_start', slow_start)
         server.model = None
 
         def load():
@@ -1575,12 +1573,10 @@ class TestEnsureModelThreadSafety:
         for t in ts:
             t.join()
 
-        assert mock_ctr[0] == 1, f"Model loaded {mock_ctr[0]} times (expected 1)"
-        assert server.model._inner is model_instance
+        assert start_ctr[0] == 1, f"_ModelClient._start called {start_ctr[0]} times (expected 1)"
 
-    def test_ensure_model_after_already_loaded_is_noop(self, mocker):
+    def test_ensure_model_after_already_loaded_is_noop(self):
         server.model = object()
-        mocker.patch("fastembed.TextEmbedding")
         server.ensure_model()
         # ensure_model returns immediately since model is already set
 
@@ -6211,10 +6207,9 @@ class TestHandleIndexSingleCharFile:
 
 
 class TestEnsureModelImportFailure:
-    """ensure_model exits when fastembed is not installed."""
+    """validate_imports exits when fastembed is not installed."""
 
     def test_import_failure_propagates(self, mocker):
-        server.model = None
         import builtins
         original_import = builtins.__import__
         def fake_import(name, *args, **kw):
@@ -6223,7 +6218,7 @@ class TestEnsureModelImportFailure:
             return original_import(name, *args, **kw)
         mocker.patch.object(builtins, "__import__", side_effect=fake_import)
         with pytest.raises(SystemExit):
-            server.ensure_model()
+            server.validate_imports()
 
 
 class TestHandleIndexOldEntryNonDict:

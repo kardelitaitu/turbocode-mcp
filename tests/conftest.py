@@ -51,8 +51,6 @@ def tmp_paths(tmp_path, monkeypatch):
 def mock_model(mocker):
     instance = MagicMock()
     instance.encode.return_value = np.random.rand(1, 384).astype(np.float32)
-    instance.embed.return_value = iter([np.random.rand(384).astype(np.float32)])
-    mocker.patch("fastembed.TextEmbedding", return_value=instance)
     import server
     server.model = instance
     return instance
