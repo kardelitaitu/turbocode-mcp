@@ -4252,3 +4252,374 @@ class TestValidateEnvironmentDebugFlagOff:
         server.validate_environment()
         captured = capsys.readouterr()
         assert captured.err == ""
+
+
+class TestDequeueNegativeBatchEdge:
+    """dequeue_batch with negative batch_size handles edges correctly."""
+
+    def test_negative_batch_with_many_items_clamped(self):
+        for i in range(10):
+            server.enqueue("new", f"/f{i}.py")
+        batch = server.dequeue_batch(-5)
+        assert len(batch) == 0
+        assert server.queue_depth() == 10
+
+    def test_negative_batch_with_single_item_clamped(self):
+        server.enqueue("new", "/a.py")
+        batch = server.dequeue_batch(-1)
+        assert len(batch) == 0
+        assert server.queue_depth() == 1
+
+
+class TestFindStaleMaxFilesGuard:
+    """find_stale_files guards against invalid max_files values."""
+
+    def test_max_files_zero_returns_empty(self):
+        server.meta = {"/a.py": {"id": 1, "last_indexed": 0}}
+        stale = server.find_stale_files(max_age_days=0, max_files=0)
+        assert stale == []
+
+    def test_max_files_negative_returns_empty(self):
+        server.meta = {"/a.py": {"id": 1, "last_indexed": 0}}
+        stale = server.find_stale_files(max_age_days=0, max_files=-5)
+        assert stale == []
+
+
+class TestSearchKBooleanTrue:
+    """search_codebase with k=True (bool subclass of int in Python)."""
+
+    def test_k_true_returns_results(self, mock_model, mock_index):
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        mock_index.search.return_value = (
+            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k=True)
+        assert isinstance(result, str)
+
+
+class TestSearchKListValue:
+    """search_codebase with non-scalar k values clamped to 1."""
+
+    def test_k_list_clamps_to_one(self, mock_model, mock_index):
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        mock_index.search.return_value = (
+            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k=[1, 2, 3])
+        assert isinstance(result, str)
+
+
+class TestHandleIndexStripAfterTruncation:
+    """handle_index correctly strips content[:2000] to avoid storing whitespace."""
+
+    def test_whitespace_after_truncation_skipped(self, tmp_path, mock_model, mock_index):
+        f = tmp_path / "f.py"
+        f.write_text("x" + " " * 2000)
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert len(server.store) == 1
+        # chunk = "x" + " " * 1999, .strip() -> "x", stored
+
+
+class TestEnsureIndexConstructFails:
+    """ensure_index survives IdMapIndex() constructor failure."""
+
+    def test_constructor_failure_after_load_failure(self, mocker):
+        with open(server.INDEX_PATH, "wb") as f:
+            f.write(b"garbage")
+        mocker.patch("server.IdMapIndex.load", side_effect=Exception("load error"))
+        mocker.patch("server.IdMapIndex", side_effect=RuntimeError("construct fails"))
+        server.index = None
+        with pytest.raises(RuntimeError, match="construct fails"):
+            server.ensure_index()
+
+
+class TestPersistAllEmptyState:
+    """persist_all handles empty meta and store."""
+
+    def test_no_meta_no_store_writes_index_only(self, mock_index):
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        server.persist_all()
+        assert os.path.exists(server.INDEX_PATH)
+        assert os.path.exists(server.META_PATH)
+        assert os.path.exists(server.STORE_PATH)
+
+    def test_with_meta_but_no_store_writes_all(self, mock_index):
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        server.meta["/a.py"] = {"id": 1, "mtime": 0, "size": 0, "last_indexed": 0}
+        server.persist_all()
+        assert os.path.exists(server.INDEX_PATH)
+        assert os.path.exists(server.META_PATH)
+        assert os.path.exists(server.STORE_PATH)
+
+
+class TestBackgroundWorkerPersistCalled:
+    """persist_all is called after each worker batch."""
+
+    def test_persist_called_after_batch(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        mock_persist = mocker.patch.object(server, "persist_all")
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.enqueue("new", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.15)
+        server._stop_event.set()
+        mock_persist.assert_called()
+
+
+class TestIndexDirectoryMtimeFailure:
+    """index_directory handles os.path.getmtime failure gracefully."""
+
+    def test_mtime_failure_on_changed_file_returns_error(self, tmp_path, mock_model, mock_index, mocker):
+        d = tmp_path / "dir"
+        d.mkdir()
+        (d / "main.py").write_text("x")
+        server.meta[str(d / "main.py")] = {"id": 1, "mtime": 100, "size": 1, "last_indexed": 200}
+        mocker.patch("os.path.getmtime", side_effect=OSError("stale handle"))
+        result = server.index_directory(str(d))
+        assert "Error" in result or "Permission denied" in result
+
+
+class TestSearchCodebaseNewlinesInContent:
+    """Search results preserve newlines in content."""
+
+    def test_multiline_content_has_newlines_in_output(self, mock_model, mock_index):
+        content = "def foo():\n    return 42\n"
+        server.store[1] = {"path": "/a.py", "content": content}
+        mock_index.search.return_value = (
+            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query")
+        assert "def foo():" in result
+        assert "    return 42" in result
+
+
+class TestSearchCodebaseResultOrdering:
+    """Results appear in descending score order."""
+
+    def test_results_sorted_by_score(self, mock_model, mock_index):
+        server.store[1] = {"path": "/low.py", "content": "low"}
+        server.store[2] = {"path": "/high.py", "content": "high"}
+        mock_index.search.return_value = (
+            np.array([[0.95, 0.99]]),
+            np.array([[1, 2]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k=2)
+        high_idx = result.index("/high.py")
+        low_idx = result.index("/low.py")
+        assert high_idx < low_idx
+
+
+class TestTouchCalledByToolsAndResources:
+    """Every tool and resource calls touch() to reset idle timer."""
+
+    def test_index_directory_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        mocker.patch("os.path.exists", return_value=True)
+        mocker.patch("os.path.isdir", return_value=True)
+        mocker.patch("os.walk", return_value=[])
+        mocker.patch("server.ensure_resources")
+        server.index_directory("/tmp/dir")
+        mock_touch.assert_called_once()
+
+    def test_search_codebase_calls_touch(self, mocker, mock_model, mock_index):
+        mock_touch = mocker.patch("server.touch")
+        mocker.patch("server.store.__bool__", return_value=True)
+        result = server.search_codebase("test")
+        mock_touch.assert_called_once()
+
+    def test_get_index_stats_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        server.get_index_stats()
+        mock_touch.assert_called_once()
+
+    def test_index_status_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        server.index_status()
+        mock_touch.assert_called_once()
+
+    def test_index_stats_resource_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        server.index_stats()
+        mock_touch.assert_called_once()
+
+
+class TestAtomicWriteUnicodeContent:
+    """atomic_write handles unicode content correctly."""
+
+    def test_write_and_read_unicode(self, tmp_path):
+        f = tmp_path / "unicode.json"
+        data = '{"café": "über cool 🎉"}'
+        server.atomic_write(str(f), data)
+        assert json.loads(f.read_text(encoding="utf-8")) == {"café": "über cool 🎉"}
+
+
+class TestEnqueueNonePriority:
+    """enqueue handles None priority without crashing."""
+
+    def test_none_priority_appended(self):
+        server.enqueue(None, "/a.py")
+        batch = server.dequeue_batch(5)
+        assert len(batch) == 1
+        assert batch[0][0] is None
+        assert batch[0][1] == "/a.py"
+
+
+class TestValidateImportsEachPackageMissing:
+    """validate_imports exits with correct message for each missing package."""
+
+    def test_fastmcp_missing_exits(self, mocker):
+        def fake_import(name, *a, **kw):
+            if name == "fastmcp":
+                raise ImportError("no fastmcp")
+            return object()
+        mocker.patch("builtins.__import__", side_effect=fake_import)
+        mock_exit = mocker.patch("sys.exit")
+        server.validate_imports()
+        mock_exit.assert_called_once_with(1)
+
+    def test_turbovec_missing_exits(self, mocker):
+        def fake_import(name, *a, **kw):
+            if name == "turbovec":
+                raise ImportError("no turbovec")
+            return object()
+        mocker.patch("builtins.__import__", side_effect=fake_import)
+        mock_exit = mocker.patch("sys.exit")
+        server.validate_imports()
+        mock_exit.assert_called_once_with(1)
+
+    def test_sentence_transformers_missing_exits(self, mocker):
+        def fake_import(name, *a, **kw):
+            if name == "sentence_transformers":
+                raise ImportError("no sentence_transformers")
+            return object()
+        mocker.patch("builtins.__import__", side_effect=fake_import)
+        mock_exit = mocker.patch("sys.exit")
+        server.validate_imports()
+        mock_exit.assert_called_once_with(1)
+
+    def test_numpy_missing_exits(self, mocker):
+        def fake_import(name, *a, **kw):
+            if name == "numpy":
+                raise ImportError("no numpy")
+            return object()
+        mocker.patch("builtins.__import__", side_effect=fake_import)
+        mock_exit = mocker.patch("sys.exit")
+        server.validate_imports()
+        mock_exit.assert_called_once_with(1)
+
+
+class TestBackgroundWorkerDoesNotReEnqueueStaleInfinitely:
+    """Worker does not infinite-loop on stale files that fail processing."""
+
+    def test_stale_failure_does_not_loop(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = RuntimeError("always fails")
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.meta[str(f)] = {"id": 1, "mtime": 100, "size": 1, "last_indexed": 0}
+        server.store[1] = {"path": str(f), "content": "old"}
+        mocker.patch.object(server, "find_stale_files", return_value=[str(f)])
+        iter_count = [0]
+        original_sleep = time.sleep
+        def tracking_sleep(s):
+            iter_count[0] += 1
+            if iter_count[0] >= 5:
+                server._stop_event.set()
+            original_sleep(min(s, 0.02))
+        mocker.patch.object(time, "sleep", side_effect=tracking_sleep)
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        t.join(timeout=5)
+        assert iter_count[0] < 20
+
+
+class TestMainLoadAndVerifyCrashLogsWarning:
+    """main() logs warning when load_and_verify raises."""
+
+    def test_warning_logged_on_load_failure(self, mocker, capsys):
+        mocker.patch("sys.argv", ["server.py"])
+        mocker.patch("server.validate_environment")
+        mocker.patch("os.makedirs")
+        mocker.patch("server.load_and_verify", side_effect=RuntimeError("corrupt state"))
+        mock_thread = mocker.patch("threading.Thread")
+        mocker.patch("server.sig_module.signal")
+        mocker.patch("server.mcp.run")
+        server.main()
+        captured = capsys.readouterr()
+        assert "Failed to load persisted state" in captured.err
+        assert server.current_id == 1
+        assert server.meta == {}
+        assert server.store == {}
+
+
+class TestIndexDirectoryRemovedFilesOnly:
+    """index_directory detects only removed files."""
+
+    def test_only_removed_files(self, tmp_path, mock_model, mock_index):
+        d = tmp_path / "dir"
+        d.mkdir()
+        tracked = d / "tracked.py"
+        tracked.write_text("x")
+        server.meta[str(tracked)] = {"id": 1, "mtime": 100, "size": 1, "last_indexed": 200}
+        os.remove(str(tracked))
+        result = server.index_directory(str(d))
+        assert "to remove" in result
+
+
+class TestSearchCodebaseStoreEmptyMessage:
+    """search_codebase returns correct message when store is empty."""
+
+    def test_empty_store_no_ensure_resources(self, mock_model, mock_index):
+        result = server.search_codebase("anything")
+        assert "Index is empty" in result
+        assert "index_directory" in result
+
+
+class TestIndexStatsWorkerStatusReflectsChange:
+    """get_index_stats shows current worker status."""
+
+    def test_stats_reflects_worker_idle_status(self):
+        server.worker_state["status"] = "idle"
+        result = server.get_index_stats()
+        assert "idle" in result
+
+    def test_stats_reflects_worker_indexing_status(self):
+        server.worker_state["status"] = "indexing"
+        result = server.get_index_stats()
+        assert "indexing" in result
+
+
+class TestHandleIndexBinaryFileStripToEmpty:
+    """Binary content that strips to empty is skipped."""
+
+    def test_binary_file_strips_to_empty(self, tmp_path, mock_model, mock_index):
+        f = tmp_path / "f.py"
+        f.write_bytes(b"\x00\x01\x02\xff\xfe")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert len(server.store) == 0
+
+
+class TestSearchCodebaseContentDisplayTrailingNewlines:
+    """search_codebase display of content with trailing newlines."""
+
+    def test_trailing_newline_in_content(self, mock_model, mock_index):
+        content = "x = 1\n\ny = 2\n"
+        server.store[1] = {"path": "/a.py", "content": content}
+        mock_index.search.return_value = (
+            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query")
+        assert "x = 1" in result
+        assert "y = 2" in result

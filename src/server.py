@@ -307,8 +307,9 @@ def dequeue_batch(batch_size: int = BATCH_SIZE) -> list[tuple[str, str]]:
         items.sort(key=lambda x: priority_order.get(x[0], 99))
         index_queue.clear()
 
-        batch = items[:batch_size]
-        remaining = items[batch_size:]
+        safe_size = max(0, int(batch_size))
+        batch = items[:safe_size]
+        remaining = items[safe_size:]
         index_queue.extend(remaining)
     return batch
 
@@ -431,6 +432,7 @@ def find_stale_files(max_age_days: int = 7, max_files: int = 10) -> list[str]:
     Uses random sampling to avoid sorting all tracked files.
     """
     cutoff = time.time() - (max_age_days * 86400)
+    safe_max = max(0, int(max_files))
 
     with index_lock:
         candidates = [
@@ -439,11 +441,11 @@ def find_stale_files(max_age_days: int = 7, max_files: int = 10) -> list[str]:
             if isinstance(info, dict) and info.get("last_indexed", 0) < cutoff
         ]
 
-    if not candidates:
+    if not candidates or safe_max == 0:
         return []
-    if len(candidates) <= max_files:
+    if len(candidates) <= safe_max:
         return candidates
-    return random.sample(candidates, max_files)
+    return random.sample(candidates, safe_max)
 
 
 # ═══════════════════════════════════════════════════════════════
