@@ -1,0 +1,26 @@
+{
+  "name": "turbocode-mcp",
+  "version": "1.0.0",
+  "description": "Local codebase vector search MCP server powered by Turbovec — fully local, no cloud, no API keys",
+  "main": "bin/cli.js",
+  "bin": {
+    "turbocode-mcp": "./bin/cli.js"
+  },
+  "scripts": {
+    "postinstall": "node ./scripts/setup.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "turbovec",
+    "rag",
+    "codebase",
+    "vector-search",
+    "semantic-search",
+    "local-ai"
+  ],
+  "author": "",
+  "license": "MIT"
+}
