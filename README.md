@@ -38,17 +38,81 @@ npm install -g turbocode-mcp
 
 ### Configure
 
-Add to your MCP client (Claude Desktop example):
+TurboCode MCP works with any MCP-compatible agent. Below are setup instructions for popular clients.
 
+| Client | Type | Config Method |
+|---|---|---|
+| **Claude Desktop** | Desktop app | `claude_desktop_config.json` → `mcpServers` |
+| **Cursor** | IDE | Settings → Features → MCP, add server |
+| **Windsurf** | IDE | `~/.codeium/windsurf/mcp_config.json` → `mcpServers` |
+| **Continue** | VS Code / JetBrains | `~/.continue/config.json` → `experimental.mcpServers` |
+| **Cline / Roo Code** | VS Code extension | `cline_mcp_settings.json` or `roo_mcp_settings.json` |
+| **Copilot** | VS Code / JetBrains | `~/.github/copilot-mcp.json` → `servers` |
+| **Aider** | CLI | `aider --mcp-servers turbocode-mcp` or `aider-mcp-chat` mode |
+| **Genkit / Goose** | CLI | `goose add mcp turbocode-mcp` or JSON config |
+
+**Claude Desktop** (`claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
-    "turbovec-search": {
+    "turbocode-mcp": {
       "command": "turbocode-mcp"
     }
   }
 }
 ```
+
+**Windsurf** (`~/.codeium/windsurf/mcp_config.json`):
+```json
+{
+  "mcpServers": {
+    "turbocode-mcp": {
+      "command": "turbocode-mcp"
+    }
+  }
+}
+```
+
+**Continue** (`~/.continue/config.json`):
+```json
+{
+  "experimental": {
+    "mcpServers": {
+      "turbocode-mcp": {
+        "command": "turbocode-mcp"
+      }
+    }
+  }
+}
+```
+
+**Cline / Roo Code** (`cline_mcp_settings.json` or `roo_mcp_settings.json`):
+```json
+{
+  "mcpServers": {
+    "turbocode-mcp": {
+      "command": "turbocode-mcp"
+    }
+  }
+}
+```
+
+**Copilot** (`~/.github/copilot-mcp.json`):
+```json
+{
+  "servers": {
+    "turbocode-mcp": {
+      "command": "turbocode-mcp"
+    }
+  }
+}
+```
+
+**Cursor:** Settings → Features → MCP → Add Server → Name: `turbocode-mcp`, Type: `command`, Command: `turbocode-mcp`
+
+**Aider:** `aider --mcp-servers turbocode-mcp` (or run `aider-mcp-chat` for an MCP-native session)
+
+**Genkit / Goose:** `goose add mcp turbocode-mcp`
 
 Your AI assistant can now index and search your local codebase.
 

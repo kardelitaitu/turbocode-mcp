@@ -46,7 +46,7 @@ Edit your `claude_desktop_config.json` (usually at `~/Library/Application Suppor
 ```json
 {
   "mcpServers": {
-    "turbovec-search": {
+    "turbocode-mcp": {
       "command": "turbocode-mcp"
     }
   }
@@ -59,7 +59,7 @@ Restart Claude Desktop. The server starts automatically — you'll see the tools
 
 1. Open Cursor Settings → Features → MCP
 2. Add a new MCP server:
-   - **Name:** `turbovec-search`
+   - **Name:** `turbocode-mcp`
    - **Type:** `command`
    - **Command:** `turbocode-mcp`
 3. The server connects via stdio. Tools appear in the AI chat panel.
@@ -71,7 +71,7 @@ Most MCP clients use the same pattern:
 ```json
 {
   "mcpServers": {
-    "turbovec-search": {
+    "turbocode-mcp": {
       "command": "turbocode-mcp"
     }
   }
@@ -83,7 +83,7 @@ If your client needs the full path:
 ```json
 {
   "mcpServers": {
-    "turbovec-search": {
+    "turbocode-mcp": {
       "command": "node",
       "args": ["/path/to/turbocode-mcp/bin/cli.js"]
     }

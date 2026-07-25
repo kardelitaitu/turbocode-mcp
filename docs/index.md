@@ -87,7 +87,7 @@ npm install -g turbocode-mcp
 # claude_desktop_config.json:
 {
   "mcpServers": {
-    "turbovec-search": {
+    "turbocode-mcp": {
       "command": "turbocode-mcp"
     }
   }
