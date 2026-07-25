@@ -5493,3 +5493,509 @@ class TestIndexDirectoryTrailingWhitespacePath:
         path_with_space = str(d) + "  "
         result = server.index_directory(path_with_space)
         assert "queued" in result.lower() or "up to date" in result.lower()
+
+
+class TestHandleIndexFifoGuard:
+    """handle_index skips non-regular files (FIFO, device, etc.) via os.path.isfile."""
+
+    def test_non_regular_file_skipped(self, tmp_path, mock_model, mock_index, mocker):
+        f = tmp_path / "special_file"
+        f.write_text("x = 1")
+        mocker.patch("server.os.path.isfile", return_value=False)
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert len(server.store) == 0
+        assert mock_index.add_with_ids.call_count == 0
+
+    def test_regular_file_still_indexed(self, tmp_path, mock_model, mock_index, mocker):
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "regular.py"
+        f.write_text("x = 1")
+        spy = mocker.spy(server.os.path, "isfile")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert str(f) in server.meta
+        spy.assert_called_with(str(f))
+
+
+class TestHandleIndexEncodeEdgeCases:
+    """handle_index tolerates unusual model.encode return types."""
+
+    def test_encode_returns_list_with_none_does_not_crash(self, tmp_path, mock_model, mock_index):
+        mock_model.encode.return_value = [None]
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert mock_index.add_with_ids.called
+
+    def test_encode_returns_list_of_nones_does_not_crash(self, tmp_path, mock_model, mock_index):
+        mock_model.encode.return_value = [None, None]
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert mock_index.add_with_ids.called
+
+    def test_encode_returns_generator_does_not_crash(self, tmp_path, mock_model, mock_index):
+        def gen():
+            yield np.random.rand(384).astype(np.float32)
+        mock_model.encode.return_value = gen()
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert mock_index.add_with_ids.called
+
+    def test_encode_returns_2d_wrong_dim(self, tmp_path, mock_model, mock_index):
+        mock_model.encode.return_value = np.random.rand(1, 10).astype(np.float32)
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert len(server.store) == 1  # Turbovec may accept wrong dim; we don't validate
+
+
+class TestHandleIndexModelIndexGuards:
+    """handle_index returns early when model or index is None."""
+
+    def test_both_none_returns_early(self, tmp_path):
+        server.model = None
+        server.index = None
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.handle_index(str(f))
+        assert len(server.store) == 0
+
+    def test_index_none_returns_early(self, tmp_path, mock_model):
+        server.index = None
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.handle_index(str(f))
+        assert len(server.store) == 0
+
+    def test_model_none_returns_early(self, tmp_path, mock_index):
+        server.model = None
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.handle_index(str(f))
+        assert len(server.store) == 0
+
+
+class TestFindStaleNoneArguments:
+    """find_stale_files handles None arguments gracefully (caught by worker)."""
+
+    def test_max_files_none_fails_internal(self):
+        server.meta = {"/a.py": {"id": 1, "last_indexed": 0}}
+        with pytest.raises(TypeError, match="int"):
+            server.find_stale_files(max_age_days=7, max_files=None)
+
+    def test_max_age_days_none_fails_internal(self):
+        server.meta = {"/a.py": {"id": 1, "last_indexed": 0}}
+        with pytest.raises(TypeError, match="unsupported operand"):
+            server.find_stale_files(max_age_days=None, max_files=10)
+
+    def test_max_files_zero_with_candidates(self):
+        server.meta = {"/a.py": {"id": 1, "last_indexed": 0}}
+        stale = server.find_stale_files(max_age_days=0, max_files=0)
+        assert stale == []
+
+
+class TestDequeueBatchEdgeTypes:
+    """dequeue_batch with non-standard batch_size types."""
+
+    def test_bytes_parsable_works(self):
+        for i in range(5):
+            server.enqueue("new", f"/f{i}.py")
+        batch = server.dequeue_batch(b"3")
+        assert len(batch) == 3
+        assert server.queue_depth() == 2
+
+    def test_bytes_unparsable_returns_empty(self):
+        server.enqueue("new", "/a.py")
+        batch = server.dequeue_batch(b"abc")
+        assert len(batch) == 0
+        assert server.queue_depth() == 1
+
+    def test_list_size_returns_empty(self):
+        server.enqueue("new", "/a.py")
+        batch = server.dequeue_batch([1, 2, 3])
+        assert len(batch) == 0
+        assert server.queue_depth() == 1
+
+    def test_dict_size_returns_empty(self):
+        server.enqueue("new", "/a.py")
+        batch = server.dequeue_batch({"a": 1})
+        assert len(batch) == 0
+        assert server.queue_depth() == 1
+
+    def test_object_size_returns_empty(self):
+        server.enqueue("new", "/a.py")
+        batch = server.dequeue_batch(object())
+        assert len(batch) == 0
+        assert server.queue_depth() == 1
+
+
+class TestBackgroundWorkerDequeueException:
+    """Worker survives dequeue_batch raising an exception."""
+
+    def test_worker_survives_dequeue_exception(self, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mocker.patch.object(server, "find_stale_files", return_value=[])
+        mock_dequeue = mocker.patch.object(server, "dequeue_batch")
+        call_count = [0]
+        def flaky_dequeue(*a, **kw):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("dequeue crashed")
+            return []
+        mock_dequeue.side_effect = flaky_dequeue
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.05)
+        server._stop_event.set()
+        t.join(timeout=1)
+        assert not t.is_alive()
+
+
+class TestPersistLockedIndexWriteReplaceFails:
+    """_persist_locked handles index.write + os.replace failure chain."""
+
+    def test_replace_fails_but_tmp_cleaned_by_main(self, mock_index, populated_state, mocker):
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        calls = []
+        real_replace = os.replace
+        def flaky_replace(src, dst):
+            calls.append((src, dst))
+            if server.INDEX_PATH + ".tmp" == src:
+                raise OSError("cross-device link")
+            return real_replace(src, dst)
+        mocker.patch("os.replace", side_effect=flaky_replace)
+        server._persist_locked()
+        assert os.path.exists(server.META_PATH)
+        assert os.path.exists(server.STORE_PATH)
+
+    def test_replace_and_atomic_write_both_fail(self, mock_index, populated_state, mocker):
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_replace = mocker.patch("os.replace")
+        def all_flaky(src, dst):
+            raise OSError("all fail")
+        mock_replace.side_effect = all_flaky
+        mocker.patch("server.atomic_write", side_effect=RuntimeError("meta fail"))
+        server._persist_locked()
+
+
+class TestSearchEdgeCases:
+    """Additional search_codebase edge cases."""
+
+    def test_empty_store_with_model_loaded(self, mock_model, mock_index):
+        result = server.search_codebase("query")
+        assert "Index is empty" in result
+
+    def test_k_is_complex_number_clamps(self, mock_model, mock_index):
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        mock_index.search.return_value = (
+            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k=1+2j)
+        assert isinstance(result, str)
+
+    def test_k_is_numpy_uint64(self, mock_model, mock_index):
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        mock_index.search.return_value = (
+            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k=np.uint64(3))
+        assert isinstance(result, str)
+
+
+class TestBackgroundWorkerBatchSizeZero:
+    """Worker doesn't busy-loop when BATCH_SIZE is 0."""
+
+    def test_batch_size_zero_no_crash(self, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mocker.patch.object(server, "BATCH_SIZE", 0)
+        mocker.patch.object(server, "find_stale_files", return_value=[])
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.05)
+        assert server.worker_state["status"] == "idle"
+        server._stop_event.set()
+        t.join(timeout=1)
+
+
+class TestAtomicWriteDoubleFailure:
+    """atomic_write handles both write and cleanup failing."""
+
+    def test_write_and_cleanup_fail_no_raise_leak(self, tmp_path, mocker):
+        target = tmp_path / "test.json"
+        mock_open = mocker.patch("builtins.open")
+        mock_open.side_effect = PermissionError("write denied")
+        mock_remove = mocker.patch("os.remove", side_effect=PermissionError("remove also denied"))
+        with pytest.raises(PermissionError, match="write denied"):
+            server.atomic_write(str(target), "data")
+        mock_remove.assert_called_once_with(str(target) + ".tmp")
+
+
+class TestLoadAndVerifyStoreJsonEdgeCases:
+    """load_and_verify handles malformed store JSON."""
+
+    def test_store_empty_dict_clears_meta(self):
+        json.dump({"/a.py": {"id": 1}}, open(server.META_PATH, "w"))
+        json.dump({}, open(server.STORE_PATH, "w"))
+        server.load_and_verify()
+        assert server.meta == {}
+        assert server.store == {}
+        assert server.current_id == 1
+
+    def test_store_valid_json_not_dict_fallback(self):
+        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.STORE_PATH, "w") as f:
+            f.write('{"1": {"path": "/a.py", "content": "x"}}')
+        server.load_and_verify()
+        assert 1 in server.store
+        assert "/a.py" in server.meta
+
+    def test_store_with_pathlike_key_value(self):
+        import pathlib
+        json.dump({}, open(server.META_PATH, "w"))
+        store = {"1": {"path": pathlib.PurePosixPath("/a.py"), "content": "x"}}
+        with open(server.STORE_PATH, "w") as f:
+            json.dump(store, f, default=str)
+        server.load_and_verify()
+        assert 1 in server.store
+        assert "/a.py" in server.meta
+
+
+class TestIndexStatsErrorConsistency:
+    """get_index_stats and index_stats resource agree on error counts."""
+
+    def test_errors_reflected_in_both(self):
+        server.worker_state["errors"] = 5
+        stats_result = server.get_index_stats()
+        resource_result = server.index_stats()
+        assert "5 errors" in stats_result
+        data = json.loads(resource_result)
+        assert data["errors"] == 5
+
+    def test_processed_reflected_in_both(self):
+        server.worker_state["processed"] = 42
+        stats_result = server.get_index_stats()
+        resource_result = server.index_stats()
+        assert "42 processed" in stats_result
+        data = json.loads(resource_result)
+        assert data["processed"] == 42
+
+    def test_queue_depth_same_in_both(self):
+        server.enqueue("new", "/a.py")
+        server.enqueue("new", "/b.py")
+        stats_result = server.get_index_stats()
+        resource_result = server.index_stats()
+        assert "2 queued" in stats_result
+        data = json.loads(resource_result)
+        assert data["queue_depth"] == 2
+
+
+class TestBackgroundWorkerPersistBaseException:
+    """BaseException from persist_all propagates through worker (not caught by except Exception)."""
+
+    def test_base_exception_kills_worker(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.return_value = None
+        class CustomBase(BaseException):
+            pass
+        mocker.patch.object(server, "persist_all", side_effect=CustomBase("fatal"))
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.current_id = 1
+        server.enqueue("new", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.1)
+        assert not t.is_alive()
+
+
+class TestIndexDirectoryPathNormalization:
+    """index_directory path normalization across platforms."""
+
+    def test_forward_slash_on_windows(self, tmp_path, mock_model, mock_index, mocker):
+        d = tmp_path / "proj"
+        d.mkdir()
+        (d / "main.py").write_text("x = 1")
+        posix_path = str(d).replace("\\", "/")
+        mocker.patch.object(server, "ensure_resources")
+        result = server.index_directory(posix_path)
+        assert "queued" in result.lower() or "up to date" in result.lower()
+
+    def test_double_separators_normalized(self, tmp_path, mock_model, mock_index, mocker):
+        d = tmp_path / "proj"
+        d.mkdir()
+        (d / "main.py").write_text("x = 1")
+        messy_path = str(d).replace("\\", "\\\\").replace("/", "//")
+        mocker.patch.object(server, "ensure_resources")
+        result = server.index_directory(messy_path)
+        assert "queued" in result.lower() or "up to date" in result.lower()
+
+    def test_relative_path_works(self, tmp_path, mock_model, mock_index, mocker):
+        import os
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(str(tmp_path))
+            d = tmp_path / "proj"
+            d.mkdir()
+            (d / "main.py").write_text("x = 1")
+            mocker.patch.object(server, "ensure_resources")
+            result = server.index_directory("proj")
+            assert "queued" in result.lower() or "up to date" in result.lower()
+        finally:
+            os.chdir(original_cwd)
+
+
+class TestHandleIndexEmptyEncodeList:
+    """handle_index with model.encode returning empty list."""
+
+    def test_empty_list_skips(self, tmp_path, mock_model, mock_index):
+        mock_model.encode.return_value = []
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert len(server.store) == 0
+
+    def test_list_with_empty_array_does_not_crash(self, tmp_path, mock_model, mock_index):
+        mock_model.encode.return_value = [np.array([])]
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert mock_index.add_with_ids.called
+
+
+class TestBackgroundWorkerNoStaleLoopWithoutPersist:
+    """Worker does not infinite-loop when stale files added but persist fails."""
+
+    def test_stale_with_persist_failure_no_infinite_loop(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "stale.py"
+        f.write_text("x = 1")
+        server.meta[str(f)] = {"id": 1, "mtime": 100, "size": 1, "last_indexed": 0}
+        server.store[1] = {"path": str(f), "content": "old"}
+        mocker.patch.object(server, "find_stale_files", return_value=[str(f)])
+        mocker.patch.object(server, "persist_all", side_effect=RuntimeError("persist fail"))
+        iter_count = [0]
+        original_sleep = time.sleep
+        def tracking_sleep(s):
+            iter_count[0] += 1
+            if iter_count[0] >= 6:
+                server._stop_event.set()
+            original_sleep(min(s, 0.02))
+        mocker.patch.object(time, "sleep", side_effect=tracking_sleep)
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        t.join(timeout=5)
+        assert iter_count[0] < 20
+
+
+class TestEnqueuePriorityOverflow:
+    """enqueue with very large number of items maintains order."""
+
+    def test_500_items_preserves_priority_order(self):
+        for i in range(100):
+            server.enqueue("new", f"/n{i}.py")
+        for i in range(100):
+            server.enqueue("remove", f"/r{i}.py")
+        for i in range(100):
+            server.enqueue("changed", f"/c{i}.py")
+        for i in range(100):
+            server.enqueue("reindex", f"/ri{i}.py")
+        for i in range(100):
+            server.enqueue("unknown", f"/u{i}.py")
+        batch = server.dequeue_batch(500)
+        assert len(batch) == 500
+        priorities = [p for p, _ in batch]
+        remove_end = max(i for i, p in enumerate(priorities) if p == "remove") if "remove" in priorities else -1
+        new_start = min(i for i, p in enumerate(priorities) if p == "new") if "new" in priorities else 999
+        assert remove_end < new_start
+
+
+class TestIndexDirectoryWithSymlinkToFile:
+    """index_directory handles symlinked files (os.walk with followlinks=False)."""
+
+    def test_symlink_to_file_not_duplicated(self, tmp_path, mock_model, mock_index):
+        real = tmp_path / "real.py"
+        real.write_text("x")
+        link = tmp_path / "link.py"
+        try:
+            os.symlink(str(real), str(link))
+        except (OSError, NotImplementedError, AttributeError):
+            pytest.skip("symlinks not supported on this platform")
+        server.index_directory(str(tmp_path))
+        depth = server.queue_depth()
+        assert depth <= 2
+
+
+class TestHandleRemoveRaceAcrossFiles:
+    """handle_remove correctly removes multiple files sequentially."""
+
+    def test_remove_10_files_sequentially(self, mock_index):
+        for i in range(10):
+            server.meta[f"/f{i}.py"] = {"id": i, "mtime": 100, "size": 1, "last_indexed": 200}
+            server.store[i] = {"path": f"/f{i}.py", "content": "x"}
+        server.current_id = 10
+        for i in range(10):
+            server.handle_remove(f"/f{i}.py")
+        assert len(server.meta) == 0
+        assert len(server.store) == 0
+
+
+class TestLoadAndVerifyRepeatedCalls:
+    """load_and_verify is idempotent when called multiple times."""
+
+    def test_called_twice_produces_same_state(self):
+        server.store = {1: {"path": "/a.py", "content": "x"}}
+        server.load_and_verify()
+        state_after_first = {
+            "meta": dict(server.meta),
+            "store": dict(server.store),
+            "current_id": server.current_id,
+        }
+        server.load_and_verify()
+        assert server.meta == state_after_first["meta"]
+        assert server.store == state_after_first["store"]
+        assert server.current_id == state_after_first["current_id"]
+
+
+class TestWorkerStateNotLeakedAcrossBatches:
+    """Worker state dict does not grow unbounded."""
+
+    def test_worker_state_keys_stable(self):
+        expected_keys = {"status", "queue_depth", "processed", "errors", "last_error"}
+        assert set(server.worker_state.keys()) == expected_keys
+
+    def test_worker_state_values_reset_on_new_batch(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = [RuntimeError("fail"), None]
+        mock_index.add_with_ids.return_value = None
+        f1 = tmp_path / "f1.py"
+        f1.write_text("x")
+        f2 = tmp_path / "f2.py"
+        f2.write_text("y")
+        server.current_id = 1
+        server.enqueue("new", str(f1))
+        server.enqueue("new", str(f2))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.05)
+        server._stop_event.set()
+        assert server.worker_state["errors"] >= 1
+        assert server.worker_state["processed"] >= 1

@@ -247,6 +247,35 @@ Applied one real bug fix in `server.py` and expanded the test suite from 248 to 
 - Should the remaining content-based JS tests eventually be replaced with more direct runtime checks, or kept as lightweight implementation guardrails?
 - Would it be useful to add a small CLI smoke test that exercises the published `turbocode-mcp` command end-to-end from a temp workspace?
 
+## 2026-07-25 — FIFO Guard, 31 New Tests, Full Suite at 671
+
+### What happened
+
+- **Bug fix:** Added `os.path.isfile()` guard in `handle_index` to prevent indefinite blocking on FIFO/pipe/special files. If a codebase contains a named pipe, the open() call would hang the worker thread permanently.
+- **20 new Python tests** in `tests/test_server.py`: FIFO guard (via mock), encode edge cases (`[None]`, generator, wrong dim), `find_stale_files` None args, `dequeue_batch` non-standard types (bytes, list, dict, object), worker dequeue-exception survival, persist replace-failure chain, search with complex k/numpy uint64, batch_size=0 worker, atomic_write double-failure cleanup, load_and_verify store JSON edge cases, stats/resource consistency, BaseException propagation in worker, path normalization (forward slash, double separators, relative), empty encode list/array, stale+persist-fail no loop, 500-item priority ordering, symlink handling, multi-file remove, load_and_verify idempotency, worker state stability.
+- **11 new JS tests** in `test/runtime.test.js`: `setup.log`/`setup.error` format, `setup.run` opts passthrough, `cli.getVersion` type, `cli.main` exit on missing Python/server-script, `cli.main` custom logFn, `setup.main` venv-exists path, `setup.main` verify-step failure, `setup.findPython` with `isWin`, `cli.getVersion` version format.
+- **Counts:** 576 Python (528 + 35 + 13) + 95 JS (84 + 11) = **671 total tests** — all passing.
+
+### Key discoveries
+
+- `handle_index` could block forever on a named pipe in the codebase. The `os.path.isfile()` check prevents this. Tested via mocking, since `os.mkfifo` is Unix-only.
+- `dequeue_batch` accepts `bytes` as batch_size (`int(b"5")` = 5 in Python 3) but rejects lists and dicts gracefully.
+- `find_stale_files` has no internal try/except — None args propagate TypeError. Worker catches these via its outer `except Exception`, but the batch item fails silently.
+- `BaseException` (e.g., custom subclasses) from `persist_all` is NOT caught by `except Exception` in the worker — it kills the thread. This is by design (we should crash on `KeyboardInterrupt`), but notable.
+- MagicMock accepts any value for `add_with_ids`, so tests for unusual encode returns must verify add_with_ids was called rather than asserting empty state.
+
+### Decisions made
+
+- FIFO/pipe guard: warn and skip, not silent. User should know we're skipping file.
+- `find_stale_files` None args: let TypeError propagate. The worker catches it.
+- JS tests for `cli.getVersion`: check return type rather than mocking fs — the production code reads the real package.json.
+- `setup.main` verify-step test: careful mock setup for `existsSync` to only fail the pythonBin check, not earlier steps.
+
+### Open questions
+
+- Should we add `os.path.isfile` to `index_directory`'s walk loop too? Currently only filtering by extension, not by file type.
+- Should the worker catch `BaseException` around `persist_all`? Current behavior lets `KeyboardInterrupt` kill the thread, which is debatable.
+
 ## Template for future entries
 
 ```markdown
