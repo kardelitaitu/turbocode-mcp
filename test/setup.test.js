@@ -43,11 +43,11 @@ describe('Setup Script', () => {
     assert.ok(fs.existsSync(pipBin), '.venv pip not found');
   });
 
-  it('requirements.txt should list all 4 dependencies', () => {
+  it('requirements.txt should list all dependencies', () => {
     const reqs = fs.readFileSync(path.join(ROOT, 'requirements.txt'), 'utf-8');
     assert.ok(reqs.includes('fastmcp'));
     assert.ok(reqs.includes('turbovec'));
-    assert.ok(reqs.includes('sentence-transformers'));
+    assert.ok(reqs.includes('fastembed'));
     assert.ok(reqs.includes('numpy'));
   });
 
