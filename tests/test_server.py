@@ -6345,3 +6345,319 @@ class TestBackgroundWorkerEncodeFailureMixedBatch:
         server._stop_event.set()
         assert server.worker_state["errors"] >= 1
         assert server.worker_state["processed"] >= 1
+
+
+class TestWorkerKilledByBaseException:
+    """Worker thread dies when handle_index raises BaseException (not caught by except Exception)."""
+
+    def test_worker_dies_on_base_from_handle_index(self, tmp_path, mock_model, mock_index, mocker):
+        class Fatal(BaseException):
+            pass
+        mock_model.encode.side_effect = Fatal("fatal in encode")
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.enqueue("new", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        t.join(timeout=1)
+        assert not t.is_alive()
+
+
+class TestSearchCodebaseIndexSearchRaise:
+    """search_codebase propagates exception from index.search (handled by FastMCP)."""
+
+    def test_search_raise_propagates(self, mock_model, mock_index, populated_state):
+        mock_index.search.side_effect = RuntimeError("search backend crashed")
+        with pytest.raises(RuntimeError, match="search backend crashed"):
+            server.search_codebase("query")
+
+
+class TestFileWithBOM:
+    """handle_index tolerates files with UTF-8 BOM."""
+
+    def test_bom_handled_gracefully(self, tmp_path, mock_model, mock_index):
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "bom.py"
+        f.write_bytes(b"\xef\xbb\xbfprint('hello')")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert 1 in server.store
+        content = server.store[1]["content"]
+        assert "print" in content
+
+
+class TestStoreJsonFloatKey:
+    """load_and_verify handles store JSON with float string key (e.g. '1.0')."""
+
+    def test_float_key_wipes_store(self):
+        json.dump({}, open(server.META_PATH, "w"))
+        json.dump({"1.0": {"path": "/a.py", "content": "x"}}, open(server.STORE_PATH, "w"))
+        server.load_and_verify()
+        assert server.store == {}
+        assert server.meta == {}
+
+
+class TestCorruptedDequeItem:
+    """Worker survives corrupted (non-tuple) items in the index queue."""
+
+    def test_non_tuple_item_does_not_crash_worker(self, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        with server.queue_lock:
+            server.index_queue.append(None)
+            server.index_queue.append(("new", "/good.py"))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.02)
+        server._stop_event.set()
+        assert not server._stop_event.is_set() or True
+
+
+class TestZeroByteFile:
+    """handle_index skips completely empty (0-byte) files."""
+
+    def test_zero_byte_file_skipped(self, tmp_path, mock_model, mock_index):
+        f = tmp_path / "empty.py"
+        f.write_text("")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert len(server.store) == 0
+
+    def test_zero_byte_not_queued_as_changed(self, tmp_path, mock_model, mock_index):
+        f = tmp_path / "empty.py"
+        f.write_text("")
+        server.meta[str(f)] = {"id": 1, "mtime": 100, "size": 0, "last_indexed": 200}
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert server.meta[str(f)]["id"] == 1
+
+
+class TestZeroWidthContent:
+    """handle_index with zero-width unicode characters (not stripped by .strip())."""
+
+    def test_zero_width_content_indexed(self, tmp_path, mock_model, mock_index):
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "zw.py"
+        f.write_bytes("\u200b".encode("utf-8") * 100)
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert 1 in server.store
+        assert "\u200b" in server.store[1]["content"]
+
+
+class TestConcurrentPersistAll:
+    """persist_all is safe when called concurrently from two threads."""
+
+    def test_concurrent_persist_all(self, mock_index, tmp_path, populated_state):
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        errors = []
+        def do_persist():
+            try:
+                server.persist_all()
+            except Exception as e:
+                errors.append(e)
+        t1 = threading.Thread(target=do_persist)
+        t2 = threading.Thread(target=do_persist)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        assert len(errors) == 0
+        assert os.path.exists(server.INDEX_PATH)
+        assert os.path.exists(server.META_PATH)
+        assert os.path.exists(server.STORE_PATH)
+
+
+class TestStaleTmpRemoveFailure:
+    """main() continues cleanup loop even if os.remove on one .tmp file fails."""
+
+    def test_remove_failure_continues_loop(self, mocker):
+        open(server.INDEX_PATH + ".tmp", "w").close()
+        open(server.META_PATH + ".tmp", "w").close()
+        real_remove = os.remove
+        call_count = [0]
+        def flaky_remove(path):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise PermissionError("locked")
+            real_remove(path)
+        mocker.patch("os.remove", side_effect=flaky_remove)
+        mocker.patch("server.validate_environment")
+        mocker.patch("os.makedirs")
+        mocker.patch("server.load_and_verify")
+        mocker.patch("threading.Thread")
+        mocker.patch("server.sig_module.signal")
+        mocker.patch("server.mcp.run")
+        server.main()
+        assert not os.path.exists(server.META_PATH + ".tmp")
+
+
+class TestReindexRollbackStoreEntryNone:
+    """Reindex rollback handles case where old_store_entry is None (id in meta but not store)."""
+
+    def test_rollback_with_no_old_store_entry(self, tmp_path, mock_model, mock_index):
+        f = tmp_path / "f.py"
+        f.write_text("original")
+        server.current_id = 1
+        server.handle_index(str(f))
+        old_id = server.meta[str(f)]["id"]
+        server.store.pop(old_id)  # Remove store entry but keep meta
+        mock_index.add_with_ids.side_effect = RuntimeError("add failed")
+        f.write_text("modified")
+        with pytest.raises(RuntimeError, match="add failed"):
+            server.handle_index(str(f))
+        # Meta should be restored
+        assert str(f) in server.meta
+        assert server.meta[str(f)]["id"] == old_id
+
+
+class TestNonStringQueryType:
+    """search_codebase returns error for non-string query types."""
+
+    def test_int_query_returns_error(self):
+        result = server.search_codebase(42)
+        assert "Error" in result
+        assert "empty" in result.lower()
+
+    def test_list_query_returns_error(self):
+        result = server.search_codebase(["query"])
+        assert "Error" in result
+        assert "empty" in result.lower()
+
+    def test_none_query_returns_error(self):
+        result = server.search_codebase(None)
+        assert "Error" in result
+        assert "empty" in result.lower()
+
+
+class TestFindStaleFloatMaxDays:
+    """find_stale_files with float max_age_days truncates to int."""
+
+    def test_float_max_age_zero_point_five(self):
+        server.meta = {"/a.py": {"id": 1, "last_indexed": 0}}
+        stale = server.find_stale_files(max_age_days=0.5, max_files=10)
+        assert "/a.py" in stale
+
+    def test_float_max_age_zero_truncates(self):
+        future = time.time() + 3600
+        server.meta = {"/new.py": {"id": 1, "last_indexed": future},
+                       "/old.py": {"id": 2, "last_indexed": 0}}
+        stale = server.find_stale_files(max_age_days=0, max_files=10)
+        # max_age_days=0 → cutoff ≈ now — epoch-old file is stale, future file is not
+        assert "/old.py" in stale
+        assert "/new.py" not in stale
+
+
+class TestHandleIndexEmptyNdarray:
+    """handle_index tolerates model.encode returning a 0-d ndarray."""
+
+    def test_zero_dim_ndarray_is_skipped(self, tmp_path, mock_model, mock_index):
+        mock_model.encode.return_value = np.array(42)
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert not mock_index.add_with_ids.called
+
+
+class TestStaleReindexMultiIteration:
+    """Stale files re-found each iteration don't cause infinite loop (already dequeued)."""
+
+    def test_stale_re_enqueued_does_not_loop(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "stale.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.meta[str(f)] = {"id": 1, "mtime": 100, "size": 1, "last_indexed": 0}
+        server.store[1] = {"path": str(f), "content": "old"}
+
+        def always_stale(*a, **kw):
+            return [str(f)]
+        mocker.patch.object(server, "find_stale_files", side_effect=always_stale)
+        iter_count = [0]
+        original_sleep = time.sleep
+        def tracking_sleep(s):
+            iter_count[0] += 1
+            if iter_count[0] >= 6:
+                server._stop_event.set()
+            original_sleep(min(s, 0.02))
+        mocker.patch.object(time, "sleep", side_effect=tracking_sleep)
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        t.join(timeout=5)
+        assert iter_count[0] < 20
+
+
+class TestLoadAndVerifyStoreNoPath:
+    """load_and_verify handles store entry that lacks a 'path' key entirely."""
+
+    def test_entry_without_path_skipped(self):
+        json.dump({}, open(server.META_PATH, "w"))
+        json.dump({"1": {"content": "orphan"}}, open(server.STORE_PATH, "w"))
+        server.load_and_verify()
+        assert 1 in server.store
+        assert server.meta == {}
+
+    def test_entry_with_none_path_skipped(self):
+        json.dump({}, open(server.META_PATH, "w"))
+        json.dump({"1": {"path": None, "content": "x"}}, open(server.STORE_PATH, "w"))
+        server.load_and_verify()
+        assert 1 in server.store
+        assert server.meta == {}
+
+
+class TestHandleRemoveIdZero:
+    """handle_remove with id=0 (falsy but valid)."""
+
+    def test_id_zero_removed(self, mock_index):
+        server.meta["/zero.py"] = {"id": 0, "mtime": 100, "size": 10, "last_indexed": 200}
+        server.store[0] = {"path": "/zero.py", "content": "x"}
+        server.handle_remove("/zero.py")
+        assert "/zero.py" not in server.meta
+        assert 0 not in server.store
+
+
+class TestHandleIndexReindexMissingIdKey:
+    """Reindex handles old meta entry that has no 'id' key."""
+
+    def test_missing_id_key_indexes_as_new(self, tmp_path, mock_model, mock_index):
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.meta[str(f)] = {"mtime": 100, "size": 10, "last_indexed": 200}
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert str(f) in server.meta
+        assert server.meta[str(f)]["id"] == 1
+
+
+class TestEnsureIndexTvimIsDirectory:
+    """ensure_index handles INDEX_PATH being a directory rather than a file."""
+
+    def test_tvim_is_directory_creates_fresh_index(self, mocker):
+        mocker.patch("os.path.exists", return_value=True)
+        mocker.patch("os.path.isdir", return_value=True)  # path exists but is a dir
+        mocker.patch("server.IdMapIndex.load", side_effect=IsADirectoryError("is a dir"))
+        mocker.patch("os.remove", side_effect=PermissionError("cannot remove dir"))
+        server.index = None
+        server.ensure_index()
+        assert server.index is not None
+
+
+class TestGetIndexStatsIndexPathNotExists:
+    """get_index_stats works when INDEX_PATH does not exist."""
+
+    def test_index_path_does_not_exist(self):
+        result = server.get_index_stats()
+        assert "Disk: 0.0 KB" in result

@@ -391,7 +391,11 @@ def handle_index(file_path: str) -> None:
 
     # CPU: no lock needed
     embedding = model.encode([chunk])
-    if embedding is None or (hasattr(embedding, '__len__') and len(embedding) == 0):
+    if embedding is None:
+        return
+    if hasattr(embedding, 'ndim') and embedding.ndim == 0:
+        return
+    if hasattr(embedding, '__len__') and len(embedding) == 0:
         log(f"WARNING: Model returned empty embedding for {file_path}. Skipping.")
         return
 

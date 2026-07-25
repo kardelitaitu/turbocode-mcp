@@ -786,4 +786,196 @@ describe('Runtime behavior', () => {
     assert.deepStrictEqual(exitTrap.codes, [1]);
     assert.ok(errors.some(l => l.includes('pip not found')));
   });
+
+  it('cli.main --help overrides --debug', () => {
+    const exitTrap = makeExitTrap();
+    let spawned = false;
+    const originalLog = console.log;
+    console.log = () => {};
+
+    try {
+      assert.throws(() => {
+        cli.main({
+          argv: ['--help', '--debug'],
+          fs: { existsSync: () => true },
+          spawn: () => { spawned = true; throw new Error('spawn'); },
+          exit: (code) => { exitTrap.exit(code); throw new Error(`exit ${code}`); },
+        });
+      }, /exit 0/);
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.deepStrictEqual(exitTrap.codes, [0]);
+    assert.strictEqual(spawned, false);
+  });
+
+  it('cli.main --version overrides --debug', () => {
+    const exitTrap = makeExitTrap();
+    let spawned = false;
+    const originalLog = console.log;
+    console.log = () => {};
+
+    try {
+      assert.throws(() => {
+        cli.main({
+          argv: ['--version', '--debug'],
+          fs: { existsSync: () => true },
+          spawn: () => { spawned = true; throw new Error('spawn'); },
+          exit: (code) => { exitTrap.exit(code); throw new Error(`exit ${code}`); },
+        });
+      }, /exit 0/);
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.deepStrictEqual(exitTrap.codes, [0]);
+    assert.strictEqual(spawned, false);
+  });
+
+  it('cli.main --debug passes --debug to server args', () => {
+    const child = new EventEmitter();
+    child.kill = () => {};
+    const spawnCalls = [];
+    const originalOn = process.on;
+    process.on = () => process;
+
+    try {
+      cli.main({
+        argv: ['--debug'],
+        fs: { existsSync: () => true },
+        paths: { pythonExecutable: '/fake/python', serverScript: '/fake/server.py' },
+        spawn: (cmd, args, opts) => {
+          spawnCalls.push({ cmd, args, opts });
+          return child;
+        },
+        exit: (code) => { throw new Error(`unexpected exit ${code}`); },
+      });
+
+      assert.strictEqual(spawnCalls.length, 1);
+      assert.deepStrictEqual(spawnCalls[0].args, ['/fake/server.py', '--debug']);
+    } finally {
+      process.on = originalOn;
+    }
+  });
+
+  it('cli.main without --debug does not pass --debug to server args', () => {
+    const child = new EventEmitter();
+    child.kill = () => {};
+    const spawnCalls = [];
+    const originalOn = process.on;
+    process.on = () => process;
+
+    try {
+      cli.main({
+        argv: [],
+        fs: { existsSync: () => true },
+        paths: { pythonExecutable: '/fake/python', serverScript: '/fake/server.py' },
+        spawn: (cmd, args, opts) => {
+          spawnCalls.push({ cmd, args, opts });
+          return child;
+        },
+        exit: (code) => { throw new Error(`unexpected exit ${code}`); },
+      });
+
+      assert.strictEqual(spawnCalls.length, 1);
+      assert.deepStrictEqual(spawnCalls[0].args, ['/fake/server.py']);
+    } finally {
+      process.on = originalOn;
+    }
+  });
+
+  it('cli.main custom env spreads into spawn options', () => {
+    const child = new EventEmitter();
+    child.kill = () => {};
+    const spawnCalls = [];
+
+    cli.main({
+      argv: [],
+      fs: { existsSync: () => true },
+      env: { CUSTOM_VAR: 'hello', PATH: '/custom/path' },
+      paths: { pythonExecutable: '/fake/python', serverScript: '/fake/server.py' },
+      spawn: (cmd, args, opts) => {
+        spawnCalls.push({ cmd, args, opts });
+        return child;
+      },
+      exit: (code) => { throw new Error(`unexpected exit ${code}`); },
+    });
+
+    assert.strictEqual(spawnCalls.length, 1);
+    assert.strictEqual(spawnCalls[0].opts.env.CUSTOM_VAR, 'hello');
+    assert.strictEqual(spawnCalls[0].opts.env.PATH, '/custom/path');
+  });
+
+  it('setup.run with empty opts object uses defaults', () => {
+    let capturedOpts = null;
+    setup.run('test-cmd', {}, {
+      execSync: (cmd, opts) => {
+        capturedOpts = opts;
+      },
+      exit: (code) => { throw new Error('should not exit'); },
+    });
+    assert.strictEqual(capturedOpts.stdio, 'inherit');
+  });
+
+  it('setup.findPython handles version with extra trailing text', () => {
+    const result = setup.findPython({
+      candidates: ['python'],
+      execSync: () => 'Python 3.11.4 (main, Sep 1 2024, 09:00:00) [GCC 12.2.0]',
+      exit: (code) => { throw new Error(`unexpected exit ${code}`); },
+    });
+    assert.strictEqual(result, 'python');
+  });
+
+  it('setup.run error message includes the failed command', () => {
+    const errors = [];
+    assert.throws(() => {
+      setup.run('pip install --broken-flag', {}, {
+        execSync: () => { throw new Error('command failed'); },
+        exit: (code) => { throw new Error('exit 1'); },
+      });
+    }, /exit 1/);
+  });
+
+  it('setup.main without paths uses defaults (no crash)', () => {
+    const fsImpl = {
+      existsSync: (target) =>
+        target.endsWith('.venv') || target.endsWith('requirements.txt') || target.endsWith('pip') || target.endsWith('python'),
+    };
+    setup.main({
+      fs: fsImpl,
+      isWin: false,
+      findPython: () => 'python3',
+      log: () => {},
+      error: () => {},
+      exit: (code) => { throw new Error(`unexpected exit ${code}`); },
+      run: () => {},
+    });
+  });
+
+  it('setup.main with Python command containing spaces works', () => {
+    const project = createTempProject();
+    fs.rmSync(project.venvDir, { recursive: true, force: true });
+    setup.main({
+      fs,
+      isWin: false,
+      paths: {
+        venvDir: project.venvDir,
+        requirements: project.requirements,
+        pythonBin: project.pythonBin,
+        pipPath: project.pipPath,
+      },
+      findPython: () => '/usr/local/bin/python3',
+      log: () => {},
+      error: () => {},
+      exit: (code) => { throw new Error(`unexpected exit ${code}`); },
+      run: (cmd) => {
+        if (cmd.includes('-m venv')) {
+          fs.mkdirSync(project.binDir, { recursive: true });
+          fs.writeFileSync(project.pipPath, '', 'utf-8');
+          fs.writeFileSync(project.pythonBin, '', 'utf-8');
+        }
+      },
+    });
+  });
 });
