@@ -7,3 +7,4 @@ __pycache__/
 *.tmp
 test_out.txt
 test_res.txt
+nul

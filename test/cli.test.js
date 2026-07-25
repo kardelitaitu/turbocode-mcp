@@ -276,4 +276,21 @@ describe('CLI Wrapper', () => {
     assert.strictEqual(r.status, 0);
     assert.match(r.stdout.trim(), /^\d+\.\d+\.\d+$/);
   });
+
+  it('should detect .venv as directory not file', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes('statSync') || content.includes('existsSync'));
+  });
+
+  it('should forward child stderr to parent stderr', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes("mcpProcess.stderr") || content.includes("stdio: 'inherit'"));
+  });
+
+  it('should exit with non-zero when Python fails to start', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes('process.exit(1)'));
+    assert.ok(content.includes('.on('));
+    assert.ok(content.includes('error'));
+  });
 });

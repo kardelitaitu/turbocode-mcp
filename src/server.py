@@ -204,7 +204,8 @@ def persist_all() -> None:
             os.replace(INDEX_PATH + ".tmp", INDEX_PATH)
         except Exception as e:
             log(f"WARNING: Failed to persist index: {e}")
-            return
+            # Continue to persist meta/store — any inconsistency is
+            # repaired by load_and_verify() on the next restart.
 
         # Meta
         try:
@@ -289,6 +290,8 @@ def load_and_verify() -> None:
 
 def enqueue(priority: str, file_path: str) -> None:
     """Thread-safe enqueue with its own lock."""
+    if not isinstance(file_path, str) or not file_path:
+        return
     with queue_lock:
         index_queue.append((priority, file_path))
 
@@ -622,7 +625,7 @@ def search_codebase(query: str, k: int = 3) -> str:
         return "Error: Query cannot be empty."
 
     # Clamp k
-    if k < 1:
+    if not isinstance(k, int) or k < 1:
         k = 1
     elif k > 20:
         k = 20

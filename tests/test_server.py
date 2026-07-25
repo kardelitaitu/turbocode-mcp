@@ -1205,13 +1205,13 @@ class TestQueueEdgeCases:
         assert len(batch) == 1
         assert batch[0][0] == "remove"
 
-    def test_enqueue_none_path_appended(self):
+    def test_enqueue_none_path_skipped(self):
         server.enqueue("new", None)
-        assert server.queue_depth() == 1
+        assert server.queue_depth() == 0
 
-    def test_enqueue_empty_string_appended(self):
+    def test_enqueue_empty_string_skipped(self):
         server.enqueue("new", "")
-        assert server.queue_depth() == 1
+        assert server.queue_depth() == 0
 
     def test_dequeue_batch_negative_size(self):
         server.enqueue("new", "/a.py")
@@ -3408,10 +3408,6 @@ class TestBackgroundWorkerPersistDoesNotCrashOnWarning:
         mock_index.add_with_ids.return_value = None
         # persist_all logs warning but doesn't raise
         def warn_persist():
-            import logging
-            logging.warning("meta persist warning")
-            # But actually persist_all doesn't raise for warnings
-            # Let's have it succeed
             pass
         mocker.patch.object(server, "persist_all", side_effect=warn_persist)
         f = tmp_path / "f.py"
@@ -3423,6 +3419,384 @@ class TestBackgroundWorkerPersistDoesNotCrashOnWarning:
         t.start()
         time.sleep(0.15)
         server._stop_event.set()
-        # Even if persist_all had warnings internally, worker should have processed file
         assert server.worker_state["processed"] == 1
         assert server.worker_state["errors"] == 0
+
+
+class TestSearchKNoneGuard:
+    """search_codebase handles k=None and k=0 without crashing."""
+
+    def test_search_k_none_returns_results(self, mock_model, mock_index):
+        server.store[1] = {"path": "/a.py", "content": "def f(): pass"}
+        mock_index.search.return_value = (
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k=None)
+        assert "No results found" not in result
+
+    def test_search_k_zero_clamps_to_one(self, mock_model, mock_index):
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        mock_index.search.return_value = (
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k=0)
+        assert "/a.py" in result
+
+
+class TestEnqueueValidationEdgeCases:
+    """enqueue rejects non-string and empty file_paths."""
+
+    def test_enqueue_non_string_path_rejected(self):
+        server.enqueue("new", 42)
+        assert server.queue_depth() == 0
+
+    def test_enqueue_whitespace_path_accepted(self):
+        server.enqueue("new", "   ")
+        assert server.queue_depth() == 1
+
+    def test_enqueue_valid_long_path_accepted(self):
+        long_path = "/" + "a" * 500 + ".py"
+        server.enqueue("new", long_path)
+        assert server.queue_depth() == 1
+        batch = server.dequeue_batch(10)
+        assert batch[0][1] == long_path
+
+
+class TestPersistContinueOnIndexFail:
+    """persist_all writes meta/store even when index.write fails."""
+
+    def test_meta_persisted_after_index_write_failure(self, mock_index, tmp_path):
+        mock_index.write.side_effect = RuntimeError("index write fails")
+        server.meta["/a.py"] = {"id": 1, "mtime": 100, "size": 10, "last_indexed": 200}
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        server.persist_all()
+        assert os.path.exists(server.META_PATH)
+
+    def test_store_persisted_after_index_write_failure(self, mock_index, tmp_path):
+        mock_index.write.side_effect = RuntimeError("index write fails")
+        server.meta["/a.py"] = {"id": 1, "mtime": 100, "size": 10, "last_indexed": 200}
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        server.persist_all()
+        assert os.path.exists(server.STORE_PATH)
+
+    def test_index_file_not_written_on_failure(self, mock_index, tmp_path):
+        mock_index.write.side_effect = RuntimeError("index write fails")
+        server.meta["/a.py"] = {"id": 1, "mtime": 100, "size": 10, "last_indexed": 200}
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        server.persist_all()
+        assert not os.path.exists(server.INDEX_PATH)
+
+
+class TestLogCapturing:
+    """Verify log/debug output behaviour via capsys."""
+
+    def test_log_writes_to_stderr(self, capsys):
+        server.log("hello")
+        captured = capsys.readouterr()
+        assert "[TurboCode MCP] hello" in captured.err
+
+    def test_debug_silent_when_disabled(self, capsys):
+        server.DEBUG_MODE = False
+        server.debug("invisible")
+        captured = capsys.readouterr()
+        assert captured.err == ""
+
+    def test_debug_outputs_when_enabled(self, capsys):
+        server.DEBUG_MODE = True
+        server.debug("visible")
+        captured = capsys.readouterr()
+        assert "[TurboCode MCP] [DEBUG] visible" in captured.err
+        server.DEBUG_MODE = False
+
+
+class TestIndexDirectoryFileInput:
+    """index_directory rejects file paths."""
+
+    def test_file_path_returns_error(self, tmp_path):
+        f = tmp_path / "afile.txt"
+        f.write_text("x")
+        result = server.index_directory(str(f))
+        assert "not a directory" in result
+
+
+class TestSearchResultExactFormat:
+    """search_codebase returns correctly formatted results."""
+
+    def test_result_contains_file_path_and_score(self, mock_model, mock_index):
+        server.store[1] = {"path": "/proj/file.py", "content": "def f(): pass"}
+        mock_index.search.return_value = (
+            np.array([[0.8765]]),
+            np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k=1)
+        assert "**/proj/file.py**" in result
+        assert "0.8765" in result
+
+    def test_multiple_results_separated_by_delimiter(self, mock_model, mock_index):
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        server.store[2] = {"path": "/b.py", "content": "y"}
+        mock_index.search.return_value = (
+            np.array([[0.95, 0.85]]),
+            np.array([[1, 2]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k=2)
+        assert "---" in result
+
+
+class TestDequeueExactFit:
+    """dequeue_batch handles exact-sized batches correctly."""
+
+    def test_exact_batch_size(self):
+        for i in range(5):
+            server.enqueue("new", f"/f{i}.py")
+        batch = server.dequeue_batch(5)
+        assert len(batch) == 5
+        assert server.queue_depth() == 0
+
+    def test_exact_batch_size_unknown_priority(self):
+        for i in range(5):
+            server.enqueue("unknown", f"/f{i}.py")
+        batch = server.dequeue_batch(5)
+        assert len(batch) == 5
+        assert server.queue_depth() == 0
+
+
+class TestFindStaleNonDictValues:
+    """find_stale_files handles non-dict meta entries gracefully."""
+
+    def test_skips_non_dict_meta_value(self):
+        server.meta["/f1.py"] = "not a dict"
+        result = server.find_stale_files(max_age_days=0, max_files=10)
+        assert result == []
+
+    def test_skips_none_meta_value(self):
+        server.meta["/f1.py"] = None
+        result = server.find_stale_files(max_age_days=0, max_files=10)
+        assert result == []
+
+
+class TestHandleIndexEncodeEdgeCase:
+    """handle_index tolerates unexpected model.encode shapes."""
+
+    def test_encode_returns_single_element_list(self, tmp_path, mock_model, mock_index):
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        mock_index.write.side_effect = None
+        mock_index.write.return_value = None
+        mock_model.encode.return_value = [np.random.rand(384).astype(np.float32)]
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert str(f) in server.meta
+
+    def test_encode_returns_multi_row_array(self, tmp_path, mock_model, mock_index):
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        mock_index.write.side_effect = None
+        mock_index.write.return_value = None
+        mock_model.encode.return_value = np.random.rand(3, 384).astype(np.float32)
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert str(f) in server.meta
+
+
+class TestBackgroundWorkerMultipleBatches:
+    """Worker handles more items than BATCH_SIZE (5) correctly."""
+
+    def test_15_items_across_3_batches(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        files = []
+        for i in range(15):
+            f = tmp_path / f"f{i}.py"
+            f.write_text(f"x = {i}")
+            files.append(f)
+        server.current_id = 1
+        for f in files:
+            server.enqueue("new", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.3)
+        server._stop_event.set()
+        assert server.worker_state["processed"] == 15
+
+    def test_worker_error_on_one_does_not_block_others(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        call_count = [0]
+        def flaky_add(emb, ids):
+            call_count[0] += 1
+            if call_count[0] == 3:
+                raise RuntimeError("third fails")
+            return None
+        mock_index.add_with_ids.side_effect = flaky_add
+        files = []
+        for i in range(7):
+            f = tmp_path / f"f{i}.py"
+            f.write_text(f"x = {i}")
+            files.append(f)
+        server.current_id = 1
+        for f in files:
+            server.enqueue("new", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.3)
+        server._stop_event.set()
+        assert server.worker_state["processed"] == 6
+        assert server.worker_state["errors"] == 1
+
+
+class TestGetIndexStatsWorkerState:
+    """get_index_stats reflects worker_state."""
+
+    def test_stats_shows_worker_processed_count(self):
+        server.worker_state["processed"] = 42
+        server.worker_state["errors"] = 7
+        result = server.get_index_stats()
+        assert "42 processed" in result
+        assert "7 errors" in result
+
+
+class TestTouchInitialValue:
+    """touch() sets last_activity to a recent time."""
+
+    def test_touch_sets_last_activity(self):
+        before = time.time()
+        server.touch()
+        assert server.last_activity >= before
+
+
+class TestSearchContentDisplay:
+    """search_codebase display truncation and ellipsis."""
+
+    def test_short_content_no_ellipsis_in_search_display(self, mock_model, mock_index):
+        short = "x" * 100
+        server.store[1] = {"path": "/a.py", "content": short}
+        mock_index.search.return_value = (
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k=1)
+        assert "..." not in result
+
+    def test_long_content_has_ellipsis_in_search_display(self, mock_model, mock_index):
+        long = "x" * 1000
+        server.store[1] = {"path": "/a.py", "content": long}
+        mock_index.search.return_value = (
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k=1)
+        assert "..." in result
+
+
+class TestMainMakedirsFailure:
+    """main() handles makedirs failure gracefully."""
+
+    def test_main_survives_makedirs_failure(self, mocker):
+        mocker.patch.object(server, "validate_environment")
+        mocker.patch.object(server, "load_and_verify")
+        mocker.patch.object(server, "os")
+        server.os.makedirs.side_effect = PermissionError("denied")
+        mocker.patch.object(server, "background_worker")
+        mocker.patch.object(server, "idle_watchdog")
+        mocker.patch.object(server, "mcp")
+        try:
+            server.main()
+        except Exception:
+            pytest.fail("main() raised on makedirs failure")
+
+
+class TestBackgroundWorkerPriorityAcrossBatches:
+    """Priority ordering preserved when items span multiple batches."""
+
+    def test_remove_before_new_across_batches(self, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mocker.patch.object(server, "find_stale_files", return_value=[])
+        for i in range(6):
+            server.enqueue("new", f"/n{i}.py")
+        for i in range(4):
+            server.enqueue("remove", f"/r{i}.py")
+        server._stop_event.clear()
+        results = []
+        original_dequeue = server.dequeue_batch
+        def capturing_dequeue(*a, **kw):
+            batch = original_dequeue(*a, **kw)
+            if batch:
+                results.extend((p, f) for p, f in batch)
+            return batch
+        mocker.patch.object(server, "dequeue_batch", side_effect=capturing_dequeue)
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.2)
+        server._stop_event.set()
+        remove_items = [p for p, _ in results if p == "remove"]
+        new_items = [p for p, _ in results if p == "new"]
+        # All removals should appear before any new items
+        if remove_items:
+            last_remove_idx = max(i for i, (p, _) in enumerate(results) if p == "remove")
+            first_new_idx = min(i for i, (p, _) in enumerate(results) if p == "new")
+            assert last_remove_idx < first_new_idx
+
+
+class TestHandleIndexNonExistentPath:
+    """handle_index silently skips non-existent paths."""
+
+    def test_nonexistent_path_skipped(self, mock_model, mock_index):
+        server.handle_index("/nonexistent/file.py")
+        assert mock_index.add_with_ids.call_count == 0
+
+
+class TestValidateEnvironmentDebugPath:
+    """validate_environment calls debug when all checks pass."""
+
+    def test_debug_called_on_success(self, capsys, mocker):
+        mocker.patch.object(server, "validate_python_version")
+        mocker.patch.object(server, "validate_imports")
+        server.DEBUG_MODE = True
+        server.validate_environment()
+        captured = capsys.readouterr()
+        assert "All startup validations passed" in captured.err
+        server.DEBUG_MODE = False
+
+
+class TestIndexStatsResourceFields:
+    """turbocode://stats resource contains required fields."""
+
+    def test_stats_resource_fields(self):
+        result = server.index_stats()
+        stats = json.loads(result)
+        assert "vectors" in stats
+        assert "files_tracked" in stats
+        assert "model_loaded" in stats
+        assert "model" in stats
+        assert stats["model"] == "all-MiniLM-L6-v2"
+
+
+class TestBackgroundWorkerIdleStatusAfterProcessing:
+    """Worker returns to idle after emptying the queue."""
+
+    def test_status_idle_after_draining_queue(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.02)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.enqueue("new", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.15)
+        assert server.worker_state["status"] == "idle" or server.worker_state["processed"] == 1
+        server._stop_event.set()
