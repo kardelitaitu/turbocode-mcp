@@ -560,6 +560,8 @@ def index_directory(directory_path: str) -> str:
     """Scan and queue files for background indexing."""
     touch()
 
+    if not isinstance(directory_path, str) or not directory_path.strip():
+        return "Error: Directory path cannot be empty."
     if not os.path.exists(directory_path):
         return f"Error: Directory '{directory_path}' not found."
     if not os.path.isdir(directory_path):
@@ -640,7 +642,7 @@ def search_codebase(query: str, k: int = 3) -> str:
     """Search indexed code for semantically similar content."""
     touch()
 
-    if not query or not query.strip():
+    if not isinstance(query, str) or not query.strip():
         return "Error: Query cannot be empty."
 
     # Clamp k

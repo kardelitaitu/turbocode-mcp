@@ -65,19 +65,19 @@ describe('Setup Script', () => {
   it('should exit on Python not found', () => {
     const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
     assert.ok(content.includes("Python not found"));
-    assert.ok(content.includes('process.exit(1)'));
+    assert.ok(content.includes('exitFn(1)'));
   });
 
   it('should exit on Python version too old', () => {
     const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
     assert.ok(content.includes('major > 3 || (major === 3 && minor >= 9)'));
-    assert.ok(content.includes('process.exit(1)'));
+    assert.ok(content.includes('exitFn(1)'));
   });
 
   it('should exit on missing pip', () => {
     const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
     assert.ok(content.includes('pip not found'));
-    assert.ok(content.includes('process.exit(1)'));
+    assert.ok(content.includes('exitFn(1)'));
   });
 
   it('should handle missing requirements.txt gracefully', () => {
@@ -87,9 +87,9 @@ describe('Setup Script', () => {
 
   it('should verify setup after completion', () => {
     const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
-    assert.ok(content.includes('pythonBin'));
-    assert.ok(content.includes('fs.existsSync(pythonBin)'));
-    assert.ok(content.includes('process.exit(1)'));
+    assert.ok(content.includes('pythonBinPath'));
+    assert.ok(content.includes('fsImpl.existsSync(pythonBinPath)'));
+    assert.ok(content.includes('exitFn(1)'));
   });
 
   it('findPython rejects version too old (test regex)', () => {
@@ -124,7 +124,7 @@ describe('Setup Script', () => {
 
   it('should handle venv already exists case', () => {
     const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
-    assert.ok(content.includes('fs.existsSync(VENV_DIR)'));
+    assert.ok(content.includes('fsImpl.existsSync(venvDir)'));
     assert.ok(content.includes('Virtual environment already exists.'));
     assert.ok(content.includes('Virtual environment created.'));
   });
@@ -140,7 +140,7 @@ describe('Setup Script', () => {
     assert.ok(content.includes('execSync'));
     assert.ok(content.includes('try'));
     assert.ok(content.includes('catch'));
-    assert.ok(content.includes('process.exit(1)'));
+    assert.ok(content.includes('exitFn(1)'));
   });
 
   it('should have proper error function for logging', () => {
@@ -174,7 +174,7 @@ describe('Setup Script', () => {
     const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
     assert.ok(content.includes('function run('));
     assert.ok(content.includes('execSync'));
-    assert.ok(content.includes('process.exit(1)'));
+    assert.ok(content.includes('deps.exit || process.exit'));
   });
 
   it('should self-execute main() at module end', () => {

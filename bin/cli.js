@@ -72,61 +72,71 @@ DOCUMENTATION:
 `.trim());
 }
 
-function main() {
+function main(options = {}) {
+    const argv = Array.isArray(options.argv) ? options.argv : process.argv.slice(2);
+    const fsImpl = options.fs || fs;
+    const spawnImpl = options.spawn || spawn;
+    const logFn = options.log || log;
+    const exitFn = options.exit || process.exit;
+    const env = options.env || process.env;
+    const paths = options.paths || {};
+    const pythonExecutable = paths.pythonExecutable || PYTHON_EXECUTABLE;
+    const serverScript = paths.serverScript || SERVER_SCRIPT;
+
     // Parse CLI flags
-    const args = process.argv.slice(2);
-    const flags = new Set(args);
+    const flags = new Set(argv);
 
     if (flags.has('--help') || flags.has('-h')) {
         printHelp();
-        process.exit(0);
+        exitFn(0);
     }
 
     if (flags.has('--version') || flags.has('-v')) {
         console.log(getVersion());
-        process.exit(0);
+        exitFn(0);
     }
 
     const debug = flags.has('--debug');
 
     // Check Python environment
-    if (!fs.existsSync(PYTHON_EXECUTABLE)) {
-        log('Python environment not found.');
-        log('Please run: npm install -g turbocode-mcp');
-        log('');
-        log(`Expected Python at: ${PYTHON_EXECUTABLE}`);
-        process.exit(1);
+    if (!fsImpl.existsSync(pythonExecutable)) {
+        logFn('Python environment not found.');
+        logFn('Please run: npm install -g turbocode-mcp');
+        logFn('');
+        logFn(`Expected Python at: ${pythonExecutable}`);
+        exitFn(1);
     }
 
     // Check server script
-    if (!fs.existsSync(SERVER_SCRIPT)) {
-        log(`Server script not found at: ${SERVER_SCRIPT}`);
-        process.exit(1);
+    if (!fsImpl.existsSync(serverScript)) {
+        logFn(`Server script not found at: ${serverScript}`);
+        exitFn(1);
     }
 
     if (debug) {
-        log(`Debug mode enabled`);
-        log(`Python: ${PYTHON_EXECUTABLE}`);
-        log(`Server: ${SERVER_SCRIPT}`);
+        logFn(`Debug mode enabled`);
+        logFn(`Python: ${pythonExecutable}`);
+        logFn(`Server: ${serverScript}`);
     }
 
     // Spawn the Python MCP server with inherited stdio
-    const serverArgs = debug ? [SERVER_SCRIPT, '--debug'] : [SERVER_SCRIPT];
-    const mcpProcess = spawn(PYTHON_EXECUTABLE, serverArgs, {
+    const serverArgs = debug ? [serverScript, '--debug'] : [serverScript];
+    const mcpProcess = spawnImpl(pythonExecutable, serverArgs, {
         stdio: 'inherit',
-        env: { ...process.env },
+        env: { ...env },
     });
 
     mcpProcess.on('error', (err) => {
-        log(`Failed to start MCP server: ${err.message}`);
-        process.exit(1);
+        logFn(`Failed to start MCP server: ${err.message}`);
+        exitFn(1);
     });
 
     mcpProcess.on('exit', (code, signal) => {
         if (signal) {
-            process.exit(128 + (signal === 'SIGINT' ? 2 : 15));
+            exitFn(128 + (signal === 'SIGINT' ? 2 : 15));
+            return;
         }
-        process.exit(typeof code === 'number' ? code : 1);
+        exitFn(typeof code === 'number' ? code : 1);
     });
 
     // Forward signals to child process
@@ -139,4 +149,16 @@ function main() {
     });
 }
 
-main();
+if (require.main === module) {
+    main();
+}
+
+module.exports = {
+    main,
+    getVersion,
+    printHelp,
+    log,
+    ROOT_DIR,
+    PYTHON_EXECUTABLE,
+    SERVER_SCRIPT,
+};

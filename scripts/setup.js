@@ -24,24 +24,28 @@ function error(msg) {
     console.error(`[turbocode-mcp] ERROR: ${msg}`);
 }
 
-function run(cmd, opts = {}) {
+function run(cmd, opts = {}, deps = {}) {
     try {
-        execSync(cmd, { stdio: 'inherit', ...opts });
+        const execFn = deps.execSync || execSync;
+        execFn(cmd, { stdio: 'inherit', ...opts });
     } catch (err) {
         error(`Command failed: ${cmd}`);
-        process.exit(1);
+        (deps.exit || process.exit)(1);
     }
 }
 
-function findPython() {
-    // Try common Python executable names
-    const candidates = IS_WIN
+function findPython(options = {}) {
+    const execFn = options.execSync || execSync;
+    const isWin = typeof options.isWin === 'boolean' ? options.isWin : IS_WIN;
+    const candidates = options.candidates || (isWin
         ? ['python', 'python3', 'py']
-        : ['python3', 'python'];
+        : ['python3', 'python']);
+    const exitFn = options.exit || process.exit;
 
+    // Try common Python executable names
     for (const cmd of candidates) {
         try {
-            const output = execSync(`${cmd} --version`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+            const output = execFn(`${cmd} --version`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
             const match = output.match(/Python (\d+)\.(\d+)/);
             if (match) {
                 const major = parseInt(match[1], 10);
@@ -50,7 +54,7 @@ function findPython() {
                     return cmd;
                 } else {
                     error(`Found ${cmd} (Python ${major}.${minor}) but need >= 3.9`);
-                    process.exit(1);
+                    exitFn(1);
                 }
             }
         } catch {
@@ -58,54 +62,81 @@ function findPython() {
         }
     }
     error('Python not found. Please install Python >= 3.9 and ensure it is on your PATH.');
-    process.exit(1);
+    exitFn(1);
 }
 
-function main() {
-    log('Setting up Python environment...');
+function main(options = {}) {
+    const fsImpl = options.fs || fs;
+    const logFn = options.log || log;
+    const errorFn = options.error || error;
+    const findPythonFn = options.findPython || findPython;
+    const runFn = options.run || run;
+    const exitFn = options.exit || process.exit;
+    const isWin = typeof options.isWin === 'boolean' ? options.isWin : IS_WIN;
+    const paths = options.paths || {};
+    const venvDir = paths.venvDir || VENV_DIR;
+    const requirements = paths.requirements || REQUIREMENTS;
+    const pythonBinPath = paths.pythonBin || (
+        isWin
+            ? path.join(venvDir, 'Scripts', 'python.exe')
+            : path.join(venvDir, 'bin', 'python')
+    );
+    const pipPath = paths.pipPath || (
+        isWin
+            ? path.join(venvDir, 'Scripts', 'pip.exe')
+            : path.join(venvDir, 'bin', 'pip')
+    );
 
-    const pythonCmd = findPython();
-    log(`Using Python: ${pythonCmd}`);
+    logFn('Setting up Python environment...');
+
+    const pythonCmd = findPythonFn({ isWin });
+    logFn(`Using Python: ${pythonCmd}`);
 
     // Step 1: Create virtual environment
-    if (!fs.existsSync(VENV_DIR)) {
-        log('Creating virtual environment...');
-        run(`${pythonCmd} -m venv "${VENV_DIR}"`);
-        log('Virtual environment created.');
+    if (!fsImpl.existsSync(venvDir)) {
+        logFn('Creating virtual environment...');
+        runFn(`${pythonCmd} -m venv "${venvDir}"`);
+        logFn('Virtual environment created.');
     } else {
-        log('Virtual environment already exists.');
+        logFn('Virtual environment already exists.');
     }
 
     // Step 2: Locate pip
-    const pipPath = IS_WIN
-        ? path.join(VENV_DIR, 'Scripts', 'pip.exe')
-        : path.join(VENV_DIR, 'bin', 'pip');
-
-    if (!fs.existsSync(pipPath)) {
-        error(`pip not found at ${pipPath}`);
-        process.exit(1);
+    if (!fsImpl.existsSync(pipPath)) {
+        errorFn(`pip not found at ${pipPath}`);
+        exitFn(1);
     }
 
     // Step 3: Install dependencies
-    if (fs.existsSync(REQUIREMENTS)) {
-        log('Installing Python dependencies...');
-        run(`"${pipPath}" install -r "${REQUIREMENTS}"`);
+    if (fsImpl.existsSync(requirements)) {
+        logFn('Installing Python dependencies...');
+        runFn(`"${pipPath}" install -r "${requirements}"`);
     } else {
-        log('requirements.txt not found, installing default packages...');
-        run(`"${pipPath}" install fastmcp turbovec sentence-transformers numpy`);
+        logFn('requirements.txt not found, installing default packages...');
+        runFn(`"${pipPath}" install fastmcp turbovec sentence-transformers numpy`);
     }
 
     // Step 4: Verify
-    const pythonBin = IS_WIN
-        ? path.join(VENV_DIR, 'Scripts', 'python.exe')
-        : path.join(VENV_DIR, 'bin', 'python');
-
-    if (!fs.existsSync(pythonBin)) {
-        error('Python environment not found after setup.');
-        process.exit(1);
+    if (!fsImpl.existsSync(pythonBinPath)) {
+        errorFn('Python environment not found after setup.');
+        exitFn(1);
     }
 
-    log('Setup complete!');
+    logFn('Setup complete!');
 }
 
-main();
+if (require.main === module) {
+    main();
+}
+
+module.exports = {
+    main,
+    run,
+    findPython,
+    log,
+    error,
+    ROOT_DIR,
+    VENV_DIR,
+    REQUIREMENTS,
+    IS_WIN,
+};

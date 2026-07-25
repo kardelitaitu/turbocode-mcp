@@ -76,15 +76,15 @@ describe('CLI Wrapper', () => {
   it('should detect missing Python environment', () => {
     const content = fs.readFileSync(CLI, 'utf-8');
     assert.ok(content.includes('PYTHON_EXECUTABLE'));
-    assert.ok(content.includes('fs.existsSync(PYTHON_EXECUTABLE)'));
-    assert.ok(content.includes('process.exit(1)'));
+    assert.ok(content.includes('pythonExecutable'));
+    assert.ok(content.includes('exitFn(1)'));
   });
 
   it('should detect missing server script', () => {
     const content = fs.readFileSync(CLI, 'utf-8');
     assert.ok(content.includes('SERVER_SCRIPT'));
-    assert.ok(content.includes('fs.existsSync(SERVER_SCRIPT)'));
-    assert.ok(content.includes('process.exit(1)'));
+    assert.ok(content.includes('serverScript'));
+    assert.ok(content.includes('exitFn(1)'));
   });
 
   it('should forward SIGINT/SIGTERM to child process', () => {
@@ -109,7 +109,7 @@ describe('CLI Wrapper', () => {
   it('should forward exit code from child', () => {
     const content = fs.readFileSync(CLI, 'utf-8');
     assert.ok(content.includes("mcpProcess.on('exit'"));
-    assert.ok(content.includes('process.exit(typeof code === '));
+    assert.ok(content.includes('exitFn(typeof code ==='));
   });
 
   it('unknown flag does not crash', { timeout: 8000 }, async () => {
@@ -242,7 +242,7 @@ describe('CLI Wrapper', () => {
   it('should forward exit code from child process on failure', () => {
     const content = fs.readFileSync(CLI, 'utf-8');
     assert.ok(content.includes("mcpProcess.on('exit'"));
-    assert.ok(content.includes('process.exit(typeof code ==='));
+    assert.ok(content.includes('exitFn(typeof code ==='));
   });
 
   it('should be syntactically valid JavaScript', () => {
@@ -287,7 +287,7 @@ describe('CLI Wrapper', () => {
 
   it('should exit with non-zero when Python fails to start', () => {
     const content = fs.readFileSync(CLI, 'utf-8');
-    assert.ok(content.includes('process.exit(1)'));
+    assert.ok(content.includes('exitFn(1)'));
     assert.ok(content.includes('.on('));
     assert.ok(content.includes('error'));
   });
@@ -299,12 +299,12 @@ describe('CLI Wrapper', () => {
 
   it('should forward child env to preserve PATH', () => {
     const content = fs.readFileSync(CLI, 'utf-8');
-    assert.ok(content.includes('{ ...process.env }'));
+    assert.ok(content.includes('{ ...env }'));
   });
 
   it('should have a main() function', () => {
     const content = fs.readFileSync(CLI, 'utf-8');
-    assert.ok(content.includes('function main()'));
+    assert.ok(content.includes('function main(options = {})'));
     assert.ok(content.includes('main()'));
   });
 
@@ -316,7 +316,7 @@ describe('CLI Wrapper', () => {
   it('should handle null exit code (killed by signal)', () => {
     const content = fs.readFileSync(CLI, 'utf-8');
     assert.ok(content.includes("typeof code === 'number'"));
-    assert.ok(content.includes("process.exit(typeof code === 'number' ? code : 1)"));
+    assert.ok(content.includes("exitFn(typeof code === 'number' ? code : 1)"));
   });
 
   it('should map SIGINT signal to exit code 130', () => {

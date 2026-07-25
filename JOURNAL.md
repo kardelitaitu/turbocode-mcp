@@ -219,6 +219,34 @@ Applied one real bug fix in `server.py` and expanded the test suite from 248 to 
 - Should `handle_index` also log a warning when it encounters a corrupt meta entry during re-index?
 - Should the background worker increment `worker_state["errors"]` for corrupt entries even if no exception was raised?
 
+## 2026-07-25 — Regression hardening and JS refactor
+
+### What happened
+
+- Added `tests/test_regressions.py` with new Python regression coverage for input guards, cold-start recovery, stale-file sampling, directory scan errors, startup cleanup, idle shutdown, and meta corruption handling.
+- Added `test/runtime.test.js` to exercise the JS setup and CLI entrypoints with injectable dependencies instead of only source-string checks.
+- Refactored `bin/cli.js` and `scripts/setup.js` to support dependency injection and safer module loading via `require.main === module`.
+- Tightened `src/server.py` input validation so non-string queries and directory paths fail cleanly instead of throwing.
+- Updated `README.md` test counts and expanded `npm test` so the new files are actually executed.
+
+### Key discoveries
+
+- `search_codebase()` could raise `AttributeError` on non-string queries.
+- `index_directory()` could raise `TypeError` on non-string directory paths.
+- `cli.js` signal exit handling was calling the exit path twice for signal-based exits.
+- The legacy JS tests were mostly source-string checks, so the entrypoint refactor required updating those assertions to the new injectable contract.
+
+### Decisions made
+
+- Kept the JS entrypoints backward-compatible for normal execution, but made them easier to test by adding optional dependency and path overrides.
+- Updated the Python server to reject invalid caller input early rather than letting built-in exceptions leak out.
+- Preserved the old JS test suite where it still made sense, but redirected the brittle checks to the new runtime-oriented behavior.
+
+### Open questions
+
+- Should the remaining content-based JS tests eventually be replaced with more direct runtime checks, or kept as lightweight implementation guardrails?
+- Would it be useful to add a small CLI smoke test that exercises the published `turbocode-mcp` command end-to-end from a temp workspace?
+
 ## Template for future entries
 
 ```markdown
