@@ -109,7 +109,7 @@ describe('CLI Wrapper', () => {
   it('should forward exit code from child', () => {
     const content = fs.readFileSync(CLI, 'utf-8');
     assert.ok(content.includes("mcpProcess.on('exit'"));
-    assert.ok(content.includes('process.exit(code)'));
+    assert.ok(content.includes('process.exit(typeof code === '));
   });
 
   it('unknown flag does not crash', { timeout: 8000 }, async () => {
@@ -240,11 +240,9 @@ describe('CLI Wrapper', () => {
   });
 
   it('should forward exit code from child process on failure', () => {
-    // Run with a flag that causes python to fail — can't easily test
-    // without manipulating .venv. Verify the code handles it.
     const content = fs.readFileSync(CLI, 'utf-8');
     assert.ok(content.includes("mcpProcess.on('exit'"));
-    assert.ok(content.includes('process.exit(code)'));
+    assert.ok(content.includes('process.exit(typeof code ==='));
   });
 
   it('should be syntactically valid JavaScript', () => {
@@ -313,5 +311,22 @@ describe('CLI Wrapper', () => {
   it('should set ROOT_DIR relative to __dirname', () => {
     const content = fs.readFileSync(CLI, 'utf-8');
     assert.ok(content.includes("path.join(__dirname, '..')"));
+  });
+
+  it('should handle null exit code (killed by signal)', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes("typeof code === 'number'"));
+    assert.ok(content.includes("process.exit(typeof code === 'number' ? code : 1)"));
+  });
+
+  it('should map SIGINT signal to exit code 130', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes("signal === 'SIGINT'"));
+    assert.ok(content.includes('128 +'));
+  });
+
+  it('should map SIGTERM signal to exit code 143', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes('? 2 : 15'));
   });
 });

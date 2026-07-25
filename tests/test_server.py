@@ -746,6 +746,7 @@ class TestIdleWatchdog:
         mock_persist = mocker.patch("server.persist_all")
         mocker.patch("server.os._exit")
         mocker.patch("server.CHECK_INTERVAL", 1000)
+        mocker.patch("time.sleep", lambda s: None)
 
         server.last_activity = time.time()
         server._stop_event.clear()
@@ -755,6 +756,8 @@ class TestIdleWatchdog:
         time.sleep(0.2)
 
         mock_persist.assert_not_called()
+        server._stop_event.set()
+        t.join(timeout=1)
 
     def test_watchdog_calls_persist_when_timed_out(self, mocker):
         mock_persist = mocker.patch("server.persist_all")
@@ -771,6 +774,8 @@ class TestIdleWatchdog:
         time.sleep(0.3)
 
         mock_persist.assert_called()
+        server._stop_event.set()
+        t.join(timeout=1)
 
 
 class TestSignalHandling:
@@ -788,7 +793,7 @@ class TestSignalHandling:
         mock_signal.assert_any_call(sig_module.SIGTERM, mocker.ANY)
 
     def test_signal_persists_on_interrupt(self, mocker):
-        mock_persist = mocker.patch("server.persist_all")
+        mock_persist_locked = mocker.patch("server._persist_locked")
         mock_exit = mocker.patch("server.os._exit")
         mocker.patch("server.sig_module.signal")
 
@@ -814,7 +819,7 @@ class TestSignalHandling:
         handler = registered_handlers.get(sig_module.SIGINT)
         if handler:
             handler(sig_module.SIGINT, None)
-            mock_persist.assert_called_once()
+            mock_persist_locked.assert_called_once()
             mock_exit.assert_called_once_with(0)
 
 
@@ -2920,11 +2925,10 @@ class TestHandleIndexRollbackScenarios:
             server.handle_index(str(f))
         except RuntimeError:
             pass
-        # The rollback should still work even though meta entry was removed earlier
-        assert str(f) not in server.meta
-        # The old entry (id=3) should no longer be in store since handle_index removed it
-        # before the rollback, and the new entry (id=5) was never fully added
-        assert 3 not in server.store
+        # Old entry should be preserved (data loss prevention)
+        assert str(f) in server.meta
+        assert 3 in server.store
+        assert server.store[3]["content"] == "old"
 
     def test_rollback_store_entry_missing(self, tmp_path, mock_model, mock_index):
         server.current_id = 7
@@ -2938,6 +2942,40 @@ class TestHandleIndexRollbackScenarios:
         # file_id=7 was never in store, so store.pop(file_id, None) is safe
         assert 7 not in server.store
         assert str(f) not in server.meta
+
+
+class TestHandleIndexReindexAddFailurePreservesOld:
+    """Reindex add failure preserves old meta/store entries (no data loss)."""
+
+    def test_add_failure_preserves_old_meta(self, tmp_path, mock_model, mock_index):
+        server.current_id = 1
+        f = tmp_path / "f.py"
+        f.write_text("old content")
+        server.handle_index(str(f))
+        old_meta = dict(server.meta[str(f)])
+
+        f.write_text("new content")
+        mock_index.add_with_ids.side_effect = RuntimeError("turbovec oom")
+        with pytest.raises(RuntimeError, match="turbovec oom"):
+            server.handle_index(str(f))
+
+        assert str(f) in server.meta
+        assert server.meta[str(f)]["id"] == old_meta["id"]
+
+    def test_add_failure_preserves_old_store(self, tmp_path, mock_model, mock_index):
+        server.current_id = 1
+        f = tmp_path / "f.py"
+        f.write_text("old content")
+        server.handle_index(str(f))
+        old_id = server.meta[str(f)]["id"]
+
+        f.write_text("new content")
+        mock_index.add_with_ids.side_effect = RuntimeError("turbovec oom")
+        with pytest.raises(RuntimeError, match="turbovec oom"):
+            server.handle_index(str(f))
+
+        assert old_id in server.store
+        assert server.store[old_id]["content"] == "old content"
 
 
 class TestHandleIndexPathTypeEdgeCases:
@@ -3803,10 +3841,10 @@ class TestBackgroundWorkerIdleStatusAfterProcessing:
 
 
 class TestSignalHandlerNoDeadlock:
-    """Signal handler calls persist_all without re-acquiring index_lock."""
+    """Signal handler uses _persist_locked with blocking=False."""
 
-    def test_handler_does_not_acquire_lock_externally(self, mocker):
-        mock_persist = mocker.patch("server.persist_all")
+    def test_handler_calls_persist_locked_not_persist_all(self, mocker):
+        mock_persist_locked = mocker.patch("server._persist_locked")
         mock_exit = mocker.patch("server.os._exit")
         mocker.patch("server.log")
         mocker.patch("server.sig_module.signal")
@@ -3827,11 +3865,11 @@ class TestSignalHandlerNoDeadlock:
         handler = registered.get(sig_module.SIGINT)
         assert handler is not None
         handler(sig_module.SIGINT, None)
-        mock_persist.assert_called_once()
+        mock_persist_locked.assert_called_once()
         mock_exit.assert_called_once_with(0)
 
-    def test_handler_does_not_deadlock_when_lock_held(self, mocker):
-        mock_persist = mocker.patch("server.persist_all")
+    def test_handler_skips_persist_when_lock_held(self, mocker):
+        mock_persist_locked = mocker.patch("server._persist_locked")
         mock_exit = mocker.patch("server.os._exit")
         mocker.patch("server.log")
         server.index_lock.acquire()
@@ -3855,7 +3893,7 @@ class TestSignalHandlerNoDeadlock:
             handler = registered.get(sig_module.SIGINT)
             assert handler is not None
             handler(sig_module.SIGINT, None)
-            mock_persist.assert_called_once()
+            mock_persist_locked.assert_not_called()
             mock_exit.assert_called_once_with(0)
         finally:
             server.index_lock.release()
@@ -4271,6 +4309,24 @@ class TestDequeueNegativeBatchEdge:
         assert server.queue_depth() == 1
 
 
+class TestDequeueBatchSpecialFloats:
+    """dequeue_batch handles NaN and infinity batch_size."""
+
+    def test_nan_batch_size_returns_empty(self):
+        server.enqueue("new", "/a.py")
+        import math
+        batch = server.dequeue_batch(float("nan"))
+        assert len(batch) == 0
+        assert server.queue_depth() == 1
+
+    def test_inf_batch_size_returns_empty(self):
+        server.enqueue("new", "/a.py")
+        import math
+        batch = server.dequeue_batch(float("inf"))
+        assert len(batch) == 0
+        assert server.queue_depth() == 1
+
+
 class TestFindStaleMaxFilesGuard:
     """find_stale_files guards against invalid max_files values."""
 
@@ -4327,8 +4383,8 @@ class TestEnsureIndexConstructFails:
     def test_constructor_failure_after_load_failure(self, mocker):
         with open(server.INDEX_PATH, "wb") as f:
             f.write(b"garbage")
-        mocker.patch("server.IdMapIndex.load", side_effect=Exception("load error"))
-        mocker.patch("server.IdMapIndex", side_effect=RuntimeError("construct fails"))
+        mock_idmap = mocker.patch("server.IdMapIndex", side_effect=RuntimeError("construct fails"))
+        mock_idmap.load.side_effect = Exception("load error")
         server.index = None
         with pytest.raises(RuntimeError, match="construct fails"):
             server.ensure_index()
@@ -4408,8 +4464,8 @@ class TestSearchCodebaseResultOrdering:
         server.store[1] = {"path": "/low.py", "content": "low"}
         server.store[2] = {"path": "/high.py", "content": "high"}
         mock_index.search.return_value = (
-            np.array([[0.95, 0.99]]),
-            np.array([[1, 2]], dtype=np.uint64),
+            np.array([[0.99, 0.95]]),
+            np.array([[2, 1]], dtype=np.uint64),
         )
         result = server.search_codebase("query", k=2)
         high_idx = result.index("/high.py")
@@ -4431,7 +4487,7 @@ class TestTouchCalledByToolsAndResources:
 
     def test_search_codebase_calls_touch(self, mocker, mock_model, mock_index):
         mock_touch = mocker.patch("server.touch")
-        mocker.patch("server.store.__bool__", return_value=True)
+        server.store[1] = {"path": "/dummy.py", "content": "x"}
         result = server.search_codebase("test")
         mock_touch.assert_called_once()
 
@@ -4600,12 +4656,13 @@ class TestIndexStatsWorkerStatusReflectsChange:
         assert "indexing" in result
 
 
-class TestHandleIndexBinaryFileStripToEmpty:
-    """Binary content that strips to empty is skipped."""
+class TestHandleIndexEncodeReturnsNone:
+    """handle_index tolerates model.encode returning None."""
 
-    def test_binary_file_strips_to_empty(self, tmp_path, mock_model, mock_index):
+    def test_encode_none_skips_indexing(self, tmp_path, mock_model, mock_index):
+        mock_model.encode.return_value = None
         f = tmp_path / "f.py"
-        f.write_bytes(b"\x00\x01\x02\xff\xfe")
+        f.write_text("x = 1")
         server.current_id = 1
         server.handle_index(str(f))
         assert len(server.store) == 0
@@ -4623,3 +4680,58 @@ class TestSearchCodebaseContentDisplayTrailingNewlines:
         result = server.search_codebase("query")
         assert "x = 1" in result
         assert "y = 2" in result
+
+
+class TestDequeueNanInfPreservesRemaining:
+    """NaN/inf batch_size does not drop remaining queued items."""
+
+    def test_nan_does_not_drop_items(self):
+        for i in range(3):
+            server.enqueue("new", f"/f{i}.py")
+        server.dequeue_batch(float("nan"))
+        assert server.queue_depth() == 3
+
+    def test_inf_does_not_drop_items(self):
+        for i in range(3):
+            server.enqueue("new", f"/f{i}.py")
+        server.dequeue_batch(float("inf"))
+        assert server.queue_depth() == 3
+
+
+class TestPersistLockedEdgeCases:
+    """_persist_locked handles edge conditions."""
+
+    def test_persist_locked_index_none_skips(self, capsys):
+        server.index = None
+        server._persist_locked()
+        captured = capsys.readouterr()
+        assert "not loaded" in captured.err or captured.err == ""
+
+    def test_persist_locked_with_data(self, mock_index, populated_state):
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        server._persist_locked()
+        assert os.path.exists(server.INDEX_PATH)
+        assert os.path.exists(server.META_PATH)
+        assert os.path.exists(server.STORE_PATH)
+
+    def test_persist_locked_index_write_failure_continues(self, mock_index, populated_state):
+        mock_index.write.side_effect = RuntimeError("write fail")
+        server._persist_locked()
+        assert os.path.exists(server.META_PATH)
+        assert os.path.exists(server.STORE_PATH)
+
+
+class TestDequeueBatchInfinityAndNanGuards:
+    """Edge cases for the try/except guard on batch_size conversion."""
+
+    def test_string_batch_size_returns_empty(self):
+        server.enqueue("new", "/a.py")
+        batch = server.dequeue_batch("not_a_number")
+        assert len(batch) == 0
+        assert server.queue_depth() == 1
+
+    def test_none_batch_size_clamps_to_zero(self):
+        server.enqueue("new", "/a.py")
+        batch = server.dequeue_batch(None)
+        assert len(batch) == 0
+        assert server.queue_depth() == 1

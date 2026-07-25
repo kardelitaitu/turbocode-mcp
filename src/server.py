@@ -185,6 +185,35 @@ def atomic_write(path: str, data: str) -> None:
         raise
 
 
+def _persist_locked() -> None:
+    """Persist all data. Caller must hold index_lock."""
+    if index is None:
+        debug("_persist_locked: index not loaded, nothing to persist.")
+        return
+
+    # Index (atomic via temp file + replace)
+    try:
+        index.write(INDEX_PATH + ".tmp")
+        os.replace(INDEX_PATH + ".tmp", INDEX_PATH)
+    except Exception as e:
+        log(f"WARNING: Failed to persist index: {e}")
+        # Continue to persist meta/store — any inconsistency is
+        # repaired by load_and_verify() on the next restart.
+
+    # Meta
+    try:
+        atomic_write(META_PATH, json.dumps(meta, indent=2, default=str))
+    except Exception as e:
+        log(f"WARNING: Failed to persist meta: {e}")
+
+    # Store (convert int keys to strings for JSON)
+    try:
+        store_serializable = {str(k): v for k, v in store.items()}
+        atomic_write(STORE_PATH, json.dumps(store_serializable, indent=2, default=str))
+    except Exception as e:
+        log(f"WARNING: Failed to persist store: {e}")
+
+
 def persist_all() -> None:
     """Save index, meta, and store to disk atomically."""
     try:
@@ -194,31 +223,7 @@ def persist_all() -> None:
         return
 
     with index_lock:
-        if index is None:
-            debug("persist_all: index not loaded, nothing to persist.")
-            return
-
-        # Index (atomic via temp file + replace)
-        try:
-            index.write(INDEX_PATH + ".tmp")
-            os.replace(INDEX_PATH + ".tmp", INDEX_PATH)
-        except Exception as e:
-            log(f"WARNING: Failed to persist index: {e}")
-            # Continue to persist meta/store — any inconsistency is
-            # repaired by load_and_verify() on the next restart.
-
-        # Meta
-        try:
-            atomic_write(META_PATH, json.dumps(meta, indent=2, default=str))
-        except Exception as e:
-            log(f"WARNING: Failed to persist meta: {e}")
-
-        # Store (convert int keys to strings for JSON)
-        try:
-            store_serializable = {str(k): v for k, v in store.items()}
-            atomic_write(STORE_PATH, json.dumps(store_serializable, indent=2, default=str))
-        except Exception as e:
-            log(f"WARNING: Failed to persist store: {e}")
+        _persist_locked()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -307,7 +312,10 @@ def dequeue_batch(batch_size: int = BATCH_SIZE) -> list[tuple[str, str]]:
         items.sort(key=lambda x: priority_order.get(x[0], 99))
         index_queue.clear()
 
-        safe_size = max(0, int(batch_size))
+        try:
+            safe_size = max(0, int(batch_size))
+        except (ValueError, OverflowError, TypeError):
+            safe_size = 0
         batch = items[:safe_size]
         remaining = items[safe_size:]
         index_queue.extend(remaining)
@@ -376,6 +384,9 @@ def handle_index(file_path: str) -> None:
 
     # CPU: no lock needed
     embedding = model.encode([chunk])
+    if embedding is None or (hasattr(embedding, '__len__') and len(embedding) == 0):
+        log(f"WARNING: Model returned empty embedding for {file_path}. Skipping.")
+        return
 
     # Critical section: lock only for mutations
     with index_lock:
@@ -387,16 +398,10 @@ def handle_index(file_path: str) -> None:
             log(f"WARNING: Cannot stat {file_path} after reading. Skipping.")
             return
 
-        # Remove old entry if re-indexing
-        if file_path in meta:
-            old_entry = meta[file_path]
-            old_id = old_entry.get("id") if isinstance(old_entry, dict) else None
-            if old_id is not None:
-                try:
-                    index.remove(old_id)
-                except Exception:
-                    pass
-                store.pop(old_id, None)
+        # Capture old entry info BEFORE removing (deferred removal)
+        old_entry = meta.get(file_path)
+        old_id = old_entry.get("id") if isinstance(old_entry, dict) else None
+        old_store_entry = store.pop(old_id, None) if old_id is not None else None
 
         try:
             file_id = current_id
@@ -409,16 +414,26 @@ def handle_index(file_path: str) -> None:
                 "size": size,
                 "last_indexed": time.time(),
             }
+            # Old vector removal after new add succeeded
+            if old_id is not None:
+                try:
+                    index.remove(old_id)
+                except Exception:
+                    pass
         except Exception:
             log(f"ERROR: Failed to add {file_path} to index. Rolling back.")
-            # Roll back partial state to prevent inconsistency
-            if file_path in meta:
-                del meta[file_path]
             store.pop(file_id, None)
             try:
                 index.remove(file_id)
             except Exception:
                 pass
+            # Restore old entry to prevent data loss
+            if old_id is not None:
+                meta[file_path] = old_entry
+                if old_store_entry is not None:
+                    store[old_id] = old_store_entry
+            else:
+                meta.pop(file_path, None)
             raise
 
 
@@ -564,7 +579,7 @@ def index_directory(directory_path: str) -> str:
             for f in files:
                 if not f.lower().endswith(SUPPORTED_EXT):
                     continue
-                fp = os.path.join(root, f)
+                fp = os.path.normpath(os.path.join(root, f))
 
                 with index_lock:
                     tracked_info = meta.get(fp)
@@ -587,10 +602,12 @@ def index_directory(directory_path: str) -> str:
         return f"Error: Cannot read directory '{directory_path}': {e}"
 
     # Detect removed files
+    norm_dir = os.path.normpath(directory_path)
+    separator = os.sep
     with index_lock:
         removed_files = [
             p for p in list(meta.keys())
-            if p.startswith(directory_path) and not os.path.exists(p)
+            if os.path.normpath(p).startswith(norm_dir + separator) and not os.path.exists(p)
         ]
 
     # Enqueue
@@ -611,7 +628,7 @@ def index_directory(directory_path: str) -> str:
         parts.append(f"{len(removed_files)} to remove")
 
     if not parts:
-        tracked_here = sum(1 for p in meta if p.startswith(directory_path))
+        tracked_here = sum(1 for p in meta if os.path.normpath(p).startswith(norm_dir + separator))
         return f"All {tracked_here} files up to date."
 
     total = len(new_files) + len(changed_files) + len(removed_files)
@@ -809,10 +826,16 @@ def main() -> None:
     # Handle graceful shutdown signals
     def handle_signal(signum, frame):
         log(f"Received signal {signum}. Persisting and shutting down...")
-        try:
-            persist_all()
-        except Exception:
-            pass
+        # Non-blocking acquire to avoid deadlock if worker holds the lock
+        if index_lock.acquire(blocking=False):
+            try:
+                _persist_locked()
+            except Exception:
+                pass
+            finally:
+                index_lock.release()
+        else:
+            log("WARNING: Index lock held by worker. Skipping persist on shutdown.")
         os._exit(0)
 
     sig_module.signal(sig_module.SIGINT, handle_signal)

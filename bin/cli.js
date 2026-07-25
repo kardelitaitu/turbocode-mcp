@@ -122,8 +122,11 @@ function main() {
         process.exit(1);
     });
 
-    mcpProcess.on('exit', (code) => {
-        process.exit(code);
+    mcpProcess.on('exit', (code, signal) => {
+        if (signal) {
+            process.exit(128 + (signal === 'SIGINT' ? 2 : 15));
+        }
+        process.exit(typeof code === 'number' ? code : 1);
     });
 
     // Forward signals to child process
