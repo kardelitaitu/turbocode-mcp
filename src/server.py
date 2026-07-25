@@ -233,7 +233,12 @@ def load_and_verify() -> None:
     if os.path.exists(META_PATH):
         try:
             with open(META_PATH, encoding="utf-8") as f:
-                meta = json.load(f)
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                meta = loaded
+            else:
+                log("WARNING: meta.json is not a dict. Starting fresh.")
+                meta = {}
         except Exception as e:
             log(f"WARNING: Corrupt meta.json ({e}). Starting fresh.")
             meta = {}
@@ -259,6 +264,8 @@ def load_and_verify() -> None:
             f"Rebuilding meta from store.")
         new_meta = {}
         for id_val, doc in store.items():
+            if not isinstance(doc, dict):
+                continue
             file_path = doc.get("path")
             if not file_path:
                 continue
@@ -325,7 +332,11 @@ def handle_remove(file_path: str) -> None:
     with index_lock:
         if file_path not in meta:
             return
-        file_id = meta[file_path]["id"]
+        old_entry = meta[file_path]
+        file_id = old_entry.get("id") if isinstance(old_entry, dict) else None
+        if file_id is None:
+            del meta[file_path]
+            return
         try:
             index.remove(file_id)
         except Exception:
@@ -364,15 +375,7 @@ def handle_index(file_path: str) -> None:
 
     # Critical section: lock only for mutations
     with index_lock:
-        # Remove old entry if re-indexing
-        if file_path in meta:
-            old_id = meta[file_path]["id"]
-            try:
-                index.remove(old_id)
-            except Exception:
-                pass
-            store.pop(old_id, None)
-
+        # Stat first to avoid orphaning old entry on stat failure
         try:
             mtime = os.path.getmtime(file_path)
             size = os.path.getsize(file_path)
@@ -380,16 +383,39 @@ def handle_index(file_path: str) -> None:
             log(f"WARNING: Cannot stat {file_path} after reading. Skipping.")
             return
 
-        file_id = current_id
-        current_id += 1
-        index.add_with_ids(embedding, np.array([file_id], dtype=np.uint64))
-        store[file_id] = {"path": file_path, "content": chunk}
-        meta[file_path] = {
-            "id": file_id,
-            "mtime": mtime,
-            "size": size,
-            "last_indexed": time.time(),
-        }
+        # Remove old entry if re-indexing
+        if file_path in meta:
+            old_entry = meta[file_path]
+            old_id = old_entry.get("id") if isinstance(old_entry, dict) else None
+            if old_id is not None:
+                try:
+                    index.remove(old_id)
+                except Exception:
+                    pass
+                store.pop(old_id, None)
+
+        try:
+            file_id = current_id
+            current_id += 1
+            index.add_with_ids(embedding, np.array([file_id], dtype=np.uint64))
+            store[file_id] = {"path": file_path, "content": chunk}
+            meta[file_path] = {
+                "id": file_id,
+                "mtime": mtime,
+                "size": size,
+                "last_indexed": time.time(),
+            }
+        except Exception:
+            log(f"ERROR: Failed to add {file_path} to index. Rolling back.")
+            # Roll back partial state to prevent inconsistency
+            if file_path in meta:
+                del meta[file_path]
+            store.pop(file_id, None)
+            try:
+                index.remove(file_id)
+            except Exception:
+                pass
+            raise
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -529,7 +555,7 @@ def index_directory(directory_path: str) -> str:
 
     # Walk filesystem
     try:
-        for root, _, files in os.walk(directory_path):
+        for root, _, files in os.walk(directory_path, followlinks=False):
             for f in files:
                 if not f.lower().endswith(SUPPORTED_EXT):
                     continue
@@ -552,6 +578,8 @@ def index_directory(directory_path: str) -> str:
                         changed_files.append(fp)
     except PermissionError:
         return f"Error: Permission denied reading directory '{directory_path}'."
+    except OSError as e:
+        return f"Error: Cannot read directory '{directory_path}': {e}"
 
     # Detect removed files
     with index_lock:
@@ -616,10 +644,14 @@ def search_codebase(query: str, k: int = 3) -> str:
     for score, doc_id in zip(scores[0], ids[0]):
         with index_lock:
             doc = store.get(int(doc_id))
-        if doc:
+        if doc and isinstance(doc, dict):
+            file_path = doc.get("path", "unknown")
+            content = doc.get("content", "")
+            display = content[:500]
+            suffix = "..." if len(content) > 500 else ""
             results.append(
-                f"**{doc['path']}** (score: {score:.4f})\n"
-                f"```\n{doc['content'][:500]}...\n```"
+                f"**{file_path}** (score: {score:.4f})\n"
+                f"```\n{display}{suffix}\n```"
             )
 
     if not results:
@@ -731,6 +763,15 @@ def main() -> None:
         os.makedirs(TURBOCODE_DIR, exist_ok=True)
     except Exception as e:
         log(f"WARNING: Cannot create {TURBOCODE_DIR}: {e}")
+
+    # Clean up stale .tmp files from previous crashes
+    for stale_tmp in [INDEX_PATH + ".tmp", META_PATH + ".tmp", STORE_PATH + ".tmp"]:
+        try:
+            if os.path.exists(stale_tmp):
+                os.remove(stale_tmp)
+                debug(f"Cleaned up stale temp file: {stale_tmp}")
+        except Exception:
+            pass
 
     # Load and verify consistency of persisted data
     try:

@@ -1,3 +1,9 @@
 pytest_out.txt
 stderr.txt
 test_output.txt
+__pycache__/
+*.pyc
+*.pyo
+*.tmp
+test_out.txt
+test_res.txt

@@ -59,6 +59,30 @@
 - **11 integration tests** — full MCP protocol handshake, tool listing, get_index_stats call, index_directory not-found/success, resource listing, status/stats resource read, search empty index, search empty query.
 - **Total: 183 tests, all passing** — unit tests in ~6.5s, full suite in ~35s.
 
+## [Unreleased]
+
+### Fixed
+
+- **`handle_index` stat-after-remove orphan bug** — `os.path.getmtime()` was called *after* old entry removal in the re-index path. If `getmtime`/`getsize` raised (file disappeared between read and lock), the old vector was removed from index/store but meta still pointed to it, creating an inconsistency. Moved stat calls before old-entry removal.
+- **`handle_index` add failure rollback** — `index.add_with_ids()` failure no longer leaves partial state (orphaned `current_id` increment, inconsistent meta/store). The mutation block is now wrapped in try/except with rollback that resets meta/store/index on failure.
+- **Test suite bug fixes** — 7 test bugs fixed: wrong-dimensions mock expectation, tmp file side-effect ordering, recursion in mock atomic_write, stale boundary time drift, mock ordering in corrupt tvim test, hypothesis fixture health check, JS syntax and path-matching issues.
+- **`load_and_verify` non-dict meta.json crash** — when `meta.json` contains a JSON array (e.g., from disk corruption), `meta.update()` fails with `AttributeError`. Added `isinstance(loaded, dict)` guard and reset to `{}`.
+- **`load_and_verify` non-dict store entry crash** — when store has a string value alongside dict values, `doc.get("path")` fails with `AttributeError`. Added `isinstance(doc, dict)` guard.
+- **`handle_index` corrupt meta `id` key crash** — `meta[file_path]["id"]` crashes with `KeyError` when meta entry exists but has no `"id"`. Added `old_entry.get("id")` safe access with `isinstance` guard.
+- **`handle_remove` corrupt meta `id` key crash** — same issue in `handle_remove`. Added safe access + early return when `"id"` is missing.
+
+### Added
+
+- **54 new Python unit tests** — 15 new test classes covering: stat-failure-preserves-old-entry (fix validation), add_with_ids rollback, remove failure non-blocking, write-failure no-tmp-leak, stale file boundary conditions, special chars in search results, corrupt tvim recreate, stats consistency, worker sleep behavior, remove-with-none-index, processed count accuracy, index-remove-index cycle, property-based search k-safety.
+- **14 new JS tests** — CLI flag precedence, path resolution, platform detection, version format, empty args start, execSync error handling, Python candidates.
+- **36 more Python unit tests** — 18 new test classes covering: handle_index rollback inner-remove-failure, meta-already-removed, store-entry-missing, path-is-directory, null-byte-path, BOM-prefixed file, ensure_index path-is-directory, empty-tvim file, get_index_stats missing/statted-path, persist_all no-temp-files-left, tmp-cleanup-on-partial-failure, worker persist-failure-error-counting, persist-failure-last-error, worker priority-remove-only, dequeue remove-before-new reindex-last, search no-results queued-hint, doc-id-not-in-store, store-entry-not-dict, same-file-indexed-twice-overwrites, current-id-increments, worker-status-indexing-during-batch, status-idle-when-no-queue, atomic_write empty-content, temp-file-cleanup-on-failure, worker persist-exception-survival, worker-continues-after-item-error, idle-watchdog-stop-during-sleep, multiline-content-truncation, oserror-during-read, permission-denied-via-mock, non-dict-meta-with-valid-store-rebuild.
+- **3 new JS CLI tests** — syntax validity check, --debug + unknown flag, --version + unknown flag.
+- **`followlinks=False`** — explicit `os.walk` parameter to prevent following symlinks (security hardening).
+- **`OSError` catch in `index_directory`** — generic OSError caught (not just PermissionError), returns descriptive error string.
+- **Stale `.tmp` cleanup at startup** — `main()` now cleans up leftover `.tmp` files from previous crashes.
+- **Cosmetic `...` suffix fix** — `search_codebase` now only appends `"..."` when content > 500 chars (was always appended).
+- **Total: 370 tests all passing** (was 299).
+
 ### Known Issues
 
 - First search/index call is ~5s (sentence-transformers model load — unavoidable cold start of the ~80MB model)

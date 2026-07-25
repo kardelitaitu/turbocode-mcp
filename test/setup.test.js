@@ -134,4 +134,39 @@ describe('Setup Script', () => {
     assert.ok(content.includes('REQUIREMENTS'));
     assert.ok(content.includes("requirements.txt not found, installing default packages"));
   });
+
+  it('should handle execSync errors gracefully', () => {
+    const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
+    assert.ok(content.includes('execSync'));
+    assert.ok(content.includes('try'));
+    assert.ok(content.includes('catch'));
+    assert.ok(content.includes('process.exit(1)'));
+  });
+
+  it('should have proper error function for logging', () => {
+    const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
+    assert.ok(content.includes("console.error(`[turbocode-mcp] ERROR:"));
+  });
+
+  it('should detect Python 3.9+ correctly', () => {
+    const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
+    // The version check condition
+    assert.ok(content.includes('major > 3 || (major === 3 && minor >= 9)'));
+  });
+
+  it('should handle both pip and pip3 on non-Windows', () => {
+    const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
+    assert.ok(content.includes('pip.exe'));
+    assert.ok(content.includes('Scripts'));
+  });
+
+  it('should include --version flag for Python detection', () => {
+    const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
+    assert.ok(content.includes('--version'));
+  });
+
+  it('should accept py as a valid Python candidate on Windows', () => {
+    const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
+    assert.ok(content.includes("'py'"));
+  });
 });

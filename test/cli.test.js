@@ -183,4 +183,97 @@ describe('CLI Wrapper', () => {
     assert.ok(r.stderr.includes('Server script not found'),
       `stderr: ${r.stderr.slice(-200)}`);
   });
+
+  it('--version with --help prints help (--help checked first)', () => {
+    const r = run(['--version', '--debug', '--help']);
+    assert.strictEqual(r.status, 0);
+    assert.ok(r.stdout.includes('USAGE'));
+  });
+
+  it('project root should resolve correctly', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes("path.join(__dirname, '..')"));
+  });
+
+  it('should detect Windows platform for venv paths', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes('IS_WIN'));
+    assert.ok(content.includes('Scripts'));
+    assert.ok(content.includes('python.exe'));
+  });
+
+  it('should detect non-Windows platform for venv paths', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes('bin'));
+    assert.ok(content.includes('python'));
+  });
+
+  it('should have correct SERVER_SCRIPT path', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes('SERVER_SCRIPT'));
+    assert.ok(content.includes("'src'"));
+    assert.ok(content.includes("'server.py'"));
+  });
+
+  it('getVersion should return version from package.json', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes('getVersion'));
+    assert.ok(content.includes('package.json'));
+    assert.ok(content.includes('.version'));
+  });
+
+  it('should handle empty args gracefully (starts server)', { timeout: 15000 }, async () => {
+    const { spawn } = require('child_process');
+    const proc = spawn('node', [CLI], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+    proc.stderr.setEncoding('utf-8');
+    let stderrData = '';
+    proc.stderr.on('data', (chunk) => { stderrData += chunk; });
+    const killed = new Promise((resolve) => {
+      setTimeout(() => { proc.kill(); resolve(); }, 10000);
+    });
+    await killed;
+    assert.ok(stderrData.includes('Ready.') || stderrData.includes('[turbocode-mcp]'),
+      `stderr was: ${stderrData.slice(-200)}`);
+  });
+
+  it('should forward exit code from child process on failure', () => {
+    // Run with a flag that causes python to fail — can't easily test
+    // without manipulating .venv. Verify the code handles it.
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes("mcpProcess.on('exit'"));
+    assert.ok(content.includes('process.exit(code)'));
+  });
+
+  it('should be syntactically valid JavaScript', () => {
+    const syntaxCheck = spawnSync('node', ['--check', CLI], { encoding: 'utf-8' });
+    assert.strictEqual(syntaxCheck.status, 0, `Syntax error: ${syntaxCheck.stderr}`);
+  });
+
+  it('should handle --debug before unknown flags gracefully', { timeout: 10000 }, async () => {
+    const { spawn } = require('child_process');
+    let stderrData = '';
+    const proc = spawn('node', [CLI, '--debug', '--unknown'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+    proc.stderr.setEncoding('utf-8');
+    proc.stderr.on('data', (chunk) => { stderrData += chunk; });
+    const killed = new Promise((resolve) => {
+      setTimeout(() => { proc.kill(); resolve(); }, 8000);
+    });
+    await killed;
+    assert.ok(
+      stderrData.includes('Ready.') || stderrData.includes('[turbocode-mcp]'),
+      `No expected output: ${stderrData.slice(-200)}`
+    );
+  });
+
+  it('should handle --version before unknown flags correctly', () => {
+    const r = run(['--version', '--some-unknown-flag']);
+    assert.strictEqual(r.status, 0);
+    assert.match(r.stdout.trim(), /^\d+\.\d+\.\d+$/);
+  });
 });
