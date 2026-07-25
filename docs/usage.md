@@ -33,10 +33,10 @@ index_directory(directory_path: str) → str
 
 ```
 → index_directory("/home/user/projects/my-app")
-  ⏳ Queued 15 files (12 new, 3 changed) for indexing.
+  Queued 15 files (12 new, 3 changed) for indexing.
 
 → index_directory("/home/user/projects/my-app")
-  ✓ All 45 files up to date.
+  All 45 files up to date.
 
 → index_directory("/nonexistent/path")
   Error: Directory '/nonexistent/path' not found.
@@ -157,9 +157,9 @@ A lightweight status indicator that never loads the model or index.
 
 | Scenario | Output |
 |---|---|
-| Server started, no activity yet | `✅ Ready. 47 files tracked. (Model loaded on demand)` |
-| Indexing in progress | `⏳ Indexing... 12 queued, 35 processed.` |
-| Idle, all files indexed | `✅ Idle. 47 files indexed.` |
+| Server started, no activity yet | `Ready. 47 files tracked. (Model loaded on demand)` |
+| Indexing in progress | `Indexing... 12 queued, 35 processed.` |
+| Idle, all files indexed | `Idle. 47 files indexed.` |
 
 ### `turbocode://stats`
 

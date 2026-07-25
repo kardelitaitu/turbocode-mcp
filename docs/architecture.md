@@ -210,6 +210,9 @@ The core of the application. A Python server using the FastMCP framework.
 ```
 server.py starts
   │
+  ├── Parse CLI flags (--debug, --help, --version handled by cli.js)
+  ├── Validate Python version (>= 3.9)
+  ├── Validate required packages (fastmcp, turbovec, etc.)
   ├── Create ~/.turbocode/ if missing
   ├── Load meta.json + store.json (small JSON, instant)
   ├── RECOVERY CHECK: count(store) vs count(meta) vs index_dim

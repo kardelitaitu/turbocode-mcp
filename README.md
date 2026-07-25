@@ -82,7 +82,7 @@ Your AI assistant can now index and search your local codebase.
 
 | Resource | What it shows |
 |---|---|
-| `turbocode://status` | `✅ Idle. 47 files indexed.` |
+| `turbocode://status` | `Idle. 47 files indexed.` |
 | `turbocode://stats` | JSON with vector count, disk usage, queue depth |
 
 ---

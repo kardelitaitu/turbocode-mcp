@@ -102,7 +102,7 @@ Once connected, here's the typical flow:
 The client loads `turbocode://status` and `turbocode://stats` into the AI's context automatically. You'll see something like:
 
 ```
-turbocode://status → ✅ Ready. 0 files tracked. (Model loaded on demand)
+turbocode://status → Ready. 0 files tracked. (Model loaded on demand)
 ```
 
 ### 2. Index a project directory
@@ -111,7 +111,7 @@ Ask the AI to index your codebase, or it may do this autonomously:
 
 ```
 → index_directory("/path/to/my-project")
-  ⏳ Queued 47 files (42 new, 3 changed, 2 to remove)
+  Queued 47 files (42 new, 3 changed, 2 to remove)
 ```
 
 The server returns immediately. Files are processed in the background in batches of 5.
@@ -136,6 +136,20 @@ You can search immediately — results are partial until all files are indexed:
   Worker: idle (0 queued, 47 processed, 0 errors)
   Model loaded: True
 ```
+
+---
+
+## CLI Reference
+
+```
+turbocode-mcp [OPTIONS]
+```
+
+| Flag | Description |
+|---|---|
+| `--help`, `-h` | Print usage information and exit |
+| `--version`, `-v` | Print the version number and exit |
+| `--debug` | Enable verbose logging to stderr |
 
 ---
 
