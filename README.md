@@ -44,6 +44,7 @@ TurboCode MCP works with any MCP-compatible agent. Below are setup instructions 
 |---|---|---|
 | **Claude Desktop** | Desktop app | `claude_desktop_config.json` → `mcpServers` |
 | **Cursor** | IDE | Settings → Features → MCP, add server |
+| **opencode** | CLI | `opencode.json` → `mcp` |
 | **Windsurf** | IDE | `~/.codeium/windsurf/mcp_config.json` → `mcpServers` |
 | **Continue** | VS Code / JetBrains | `~/.continue/config.json` → `experimental.mcpServers` |
 | **Cline / Roo Code** | VS Code extension | `cline_mcp_settings.json` or `roo_mcp_settings.json` |
@@ -113,6 +114,22 @@ TurboCode MCP works with any MCP-compatible agent. Below are setup instructions 
 **Aider:** `aider --mcp-servers turbocode-mcp` (or run `aider-mcp-chat` for an MCP-native session)
 
 **Genkit / Goose:** `goose add mcp turbocode-mcp`
+
+**opencode** (`opencode.json`):
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "turbocode-mcp": {
+        "type": "local",
+        "command": ["turbocode-mcp"],
+        "enabled": true
+      }
+    }
+  }
+}
+```
 
 Your AI assistant can now index and search your local codebase.
 
