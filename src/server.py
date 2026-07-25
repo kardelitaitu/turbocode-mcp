@@ -102,14 +102,25 @@ class _ModelClient:
             [sys.executable, embed_script, self._model_name],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
         )
         if self._proc.poll() is not None:
+            err = self._proc.stderr.read()
             raise RuntimeError(
-                "Embed subprocess exited immediately (check fastembed install)"
+                f"Embed subprocess exited immediately: {err.strip()}"
             )
+        # Forward subprocess stderr to server log
+        self._stderr_thread = threading.Thread(
+            target=self._forward_stderr, daemon=True
+        )
+        self._stderr_thread.start()
+
+    def _forward_stderr(self) -> None:
+        for line in self._proc.stderr:
+            if line.strip():
+                log(f"[embed] {line.strip()}")
 
     def encode(self, texts: list[str], **kwargs) -> np.ndarray:
         with self._lock:

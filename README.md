@@ -16,15 +16,27 @@ npm install -g turbocode-mcp
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Node >=18](https://img.shields.io/badge/node->=18-green.svg)](https://nodejs.org)
 [![Python >=3.9](https://img.shields.io/badge/python->=3.9-blue.svg)](https://python.org)
-[![Tests: 619 passing](https://img.shields.io/badge/tests-619%20passing-brightgreen.svg)](https://github.com/anomalyco/turbocode-mcp)
+[![Tests: 623 passing](https://img.shields.io/badge/tests-623%20passing-brightgreen.svg)](https://github.com/anomalyco/turbocode-mcp)
 
 ---
 
 ## Quick Start
 
+### CPU (default)
+
 ```bash
 npm install -g turbocode-mcp
 ```
+
+### GPU (CUDA / DirectML / CoreML)
+
+```bash
+npm install -g turbocode-mcp
+# Install GPU-enabled ONNX Runtime inside the auto-created venv
+~/.turbocode/.venv/Scripts/pip install onnxruntime-gpu
+```
+
+### Configure
 
 Add to your MCP client (Claude Desktop example):
 
@@ -50,7 +62,11 @@ Your AI assistant can now index and search your local codebase.
 | **💾 Persistent** | Index saved to disk. Survives restarts. |
 | **⏳ Background Indexing** | Tools return instantly; files processed in batches. |
 | **🪶 Lazy Loading** | Server starts in ~100ms. The heavy ML model loads only on first search. |
-| **✅ 619 Tests** | 575 Python + 44 JS, all passing. Regression-gated. |
+| **🧠 Process Isolation** | Embedding model runs in a subprocess — main server stays at ~15MB. |
+| **🧩 Model Choice** | `--model=<name>` flag to swap embedding models (default: `BAAI/bge-small-en-v1.5`). |
+| **⚡ GPU Auto-Detect** | Uses CUDA/DirectML/CoreML automatically when `onnxruntime-gpu` is installed. |
+| **🚫 .gitignore Aware** | `index_directory` skips gitignored files by default. Opt out with `respect_gitignore=False`. |
+| **✅ 623 Tests** | 7 focused test files, all passing. Regression-gated. |
 | **💤 Auto-Shutdown** | Exits after 30 idle minutes. Client auto-restarts on next call. |
 | **🔄 Self-Maintaining** | Idle worker re-indexes stale files automatically. |
 | **📦 One-Command Install** | Python venv and dependencies set up automatically. |

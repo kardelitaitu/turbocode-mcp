@@ -15,12 +15,31 @@ import numpy as np
 from fastembed import TextEmbedding
 
 
+def _pick_providers() -> list[str] | None:
+    """Detect GPU ONNX providers. Returns None to use fastembed defaults (CPU)."""
+    try:
+        import onnxruntime as ort
+    except ImportError:
+        return None
+    available = ort.get_available_providers()
+    preferred = ["CUDAExecutionProvider", "DmlExecutionProvider", "CoreMLExecutionProvider", "MIGraphXExecutionProvider", "ROCMExecutionProvider"]
+    matched = [p for p in preferred if p in available]
+    if matched:
+        return matched + ["CPUExecutionProvider"]
+    return None
+
+
 def main() -> None:
     model_name = sys.argv[1] if len(sys.argv) > 1 else "BAAI/bge-small-en-v1.5"
+    providers = _pick_providers()
+    if providers:
+        print(f"GPU providers detected: {providers}", file=sys.stderr)
     try:
-        model = TextEmbedding(model_name=model_name, max_length=512)
+        kwargs = {"model_name": model_name, "max_length": 512}
+        if providers:
+            kwargs["providers"] = providers
+        model = TextEmbedding(**kwargs)
     except Exception as e:
-        # Emit error and exit so the parent can detect the failure
         sys.stdout.write(json.dumps({"type": "error", "message": str(e)}) + "\n")
         sys.stdout.flush()
         sys.exit(1)
