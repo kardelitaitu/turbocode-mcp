@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://img.shield.io/badge/TurboCode-MCP-FF6B35?style=for-the-badge&logo=python&logoColor=white">
-  <img alt="TurboCode MCP" src="https://img.shield.io/badge/TurboCode-MCP-FF6B35?style=for-the-badge&logo=python&logoColor=white">
+  <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/TurboCode-MCP-FF6B35?style=for-the-badge&logo=python&logoColor=white">
+  <img alt="TurboCode MCP" src="https://img.shields.io/badge/TurboCode-MCP-FF6B35?style=for-the-badge&logo=python&logoColor=white">
 </picture>
 
 # TurboCode MCP
@@ -12,10 +12,11 @@ Index your projects and search them semantically — no cloud, no data leaves yo
 npm install -g turbocode-mcp
 ```
 
-[![npm version](https://img.shield.io/npm/v/turbocode-mcp.svg)](https://www.npmjs.com/package/turbocode-mcp)
-[![License: MIT](https://img.shield.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Node >=18](https://img.shield.io/badge/node->=18-green.svg)](https://nodejs.org)
-[![Python >=3.9](https://img.shield.io/badge/python->=3.9-blue.svg)](https://python.org)
+[![npm version](https://img.shields.io/npm/v/turbocode-mcp.svg)](https://www.npmjs.com/package/turbocode-mcp)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Node >=18](https://img.shields.io/badge/node->=18-green.svg)](https://nodejs.org)
+[![Python >=3.9](https://img.shields.io/badge/python->=3.9-blue.svg)](https://python.org)
+[![Tests: 495 passing](https://img.shields.io/badge/tests-495%20passing-brightgreen.svg)](https://github.com/anomalyco/turbocode-mcp)
 
 ---
 
@@ -49,6 +50,7 @@ Your AI assistant can now index and search your local codebase.
 | **💾 Persistent** | Index saved to disk. Survives restarts. |
 | **⏳ Background Indexing** | Tools return instantly; files processed in batches. |
 | **🪶 Lazy Loading** | Server starts in ~100ms. The heavy ML model loads only on first search. |
+| **✅ 495+ Tests** | 427 Python + 68 JS, all passing. Regression-gated. |
 | **💤 Auto-Shutdown** | Exits after 30 idle minutes. Client auto-restarts on next call. |
 | **🔄 Self-Maintaining** | Idle worker re-indexes stale files automatically. |
 | **📦 One-Command Install** | Python venv and dependencies set up automatically. |
