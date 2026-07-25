@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import math
 import time
 import random
 import subprocess
@@ -566,6 +567,8 @@ def find_stale_files(max_age_days: int = 7, max_files: int = 10) -> list[str]:
 def background_worker() -> None:
     """Daemon thread: process index queue in small batches."""
     interval = max(BATCH_INTERVAL, 0.1)  # prevent busy-loop
+    if math.isnan(interval):
+        interval = 0.1
 
     while not _stop_event.is_set():
         batch = dequeue_batch(BATCH_SIZE)
@@ -587,8 +590,15 @@ def background_worker() -> None:
         worker_state["status"] = "indexing"
 
         # Process each file — I/O and CPU outside lock
-        for priority, file_path in batch:
+        for entry in batch:
             try:
+                try:
+                    priority, file_path = entry
+                except (TypeError, ValueError):
+                    log(f"ERROR: Skipping malformed queue entry: {entry}")
+                    worker_state["errors"] += 1
+                    worker_state["last_error"] = f"malformed entry: {entry!r}"
+                    continue
                 debug(f"Processing [{priority}] {file_path}")
                 if priority == "remove":
                     handle_remove(file_path)
@@ -604,10 +614,13 @@ def background_worker() -> None:
         debug(f"Batch complete. Persisting...")
         try:
             persist_all()
-        except Exception as e:
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as e:
             log(f"ERROR: Failed to persist index: {e}")
             worker_state["errors"] += 1
             worker_state["last_error"] = str(e)
+            break
 
         time.sleep(interval)
 
@@ -858,6 +871,279 @@ def get_index_stats() -> str:
         f"{worker_state['errors']} errors)\n"
         f"- Model loaded: {model is not None}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 4.4 — New Tools (Ingestion, Search, File Access)
+# ═══════════════════════════════════════════════════════════════
+
+
+@mcp.tool
+def index_workspace(directory_path: str) -> str:
+    """Recursively scan and index code files (.py, .rs, .js, .ts, .md) in a workspace."""
+    touch()
+
+    if not isinstance(directory_path, str) or not directory_path.strip():
+        return "Error: Directory path cannot be empty."
+    if not os.path.exists(directory_path):
+        return f"Error: Directory '{directory_path}' not found."
+    if not os.path.isdir(directory_path):
+        return f"Error: '{directory_path}' is a file, not a directory."
+
+    ensure_resources()
+
+    SUPPORTED_EXT = (".py", ".rs", ".js", ".ts", ".md")
+
+    new_files: list[str] = []
+    changed_files: list[str] = []
+
+    with index_lock:
+        meta_snapshot = dict(meta)
+
+    try:
+        for root, _, files in os.walk(directory_path, followlinks=False):
+            for f in files:
+                if not f.lower().endswith(SUPPORTED_EXT):
+                    continue
+                fp = os.path.normpath(os.path.join(root, f))
+                tracked_info = meta_snapshot.get(fp)
+                tracked = tracked_info is not None
+                tracked_mtime = (
+                    tracked_info.get("mtime", 0)
+                    if isinstance(tracked_info, dict)
+                    else None
+                )
+                if not tracked:
+                    new_files.append(fp)
+                else:
+                    try:
+                        file_mtime = os.path.getmtime(fp)
+                    except OSError:
+                        continue
+                    if tracked_mtime != file_mtime:
+                        changed_files.append(fp)
+    except PermissionError:
+        return f"Error: Permission denied reading directory '{directory_path}'."
+    except OSError as e:
+        return f"Error: Cannot read directory '{directory_path}': {e}"
+
+    norm_dir = os.path.normpath(directory_path)
+    separator = os.sep
+    with index_lock:
+        removed_files = [
+            p for p in list(meta.keys())
+            if os.path.normpath(p).startswith(norm_dir + separator) and not os.path.exists(p)
+        ]
+
+    for f in removed_files:
+        enqueue("remove", f)
+    for f in changed_files:
+        enqueue("changed", f)
+    for f in new_files:
+        enqueue("new", f)
+
+    parts = []
+    if new_files:
+        parts.append(f"{len(new_files)} new")
+    if changed_files:
+        parts.append(f"{len(changed_files)} changed")
+    if removed_files:
+        parts.append(f"{len(removed_files)} to remove")
+
+    if not parts:
+        tracked_here = sum(1 for p in meta if os.path.normpath(p).startswith(norm_dir + separator))
+        return f"All {tracked_here} files up to date."
+
+    total = len(new_files) + len(changed_files) + len(removed_files)
+    return f"Queued {total} files ({', '.join(parts)}) for indexing."
+
+
+@mcp.tool
+def update_file_index(file_path: str) -> str:
+    """Re-index a single file immediately. Call after modifying a file."""
+    touch()
+
+    if not isinstance(file_path, str) or not file_path.strip():
+        return "Error: File path cannot be empty."
+    try:
+        if not os.path.isfile(file_path):
+            return f"Error: '{file_path}' is not a regular file or does not exist."
+    except Exception as e:
+        return f"Error: Cannot access '{file_path}': {e}"
+
+    ensure_resources()
+
+    try:
+        handle_index(file_path)
+        persist_all()
+    except Exception as e:
+        return f"Error: Failed to re-index '{file_path}': {e}"
+
+    return f"Re-indexed '{file_path}'."
+
+
+@mcp.tool
+def get_index_status() -> str:
+    """Check the current index state: file count, vector count, directories tracked."""
+    touch()
+
+    with index_lock:
+        vcount = len(store)
+        fcount = len(meta)
+
+    dirs = set(os.path.dirname(p) for p in meta)
+    qdepth = queue_depth()
+
+    return (
+        f"Index Status\n"
+        f"- Files tracked: {fcount}\n"
+        f"- Vectors: {vcount}\n"
+        f"- Directories: {len(dirs)}\n"
+        f"- Worker: {worker_state['status']} "
+        f"({qdepth} queued, {worker_state['processed']} processed, "
+        f"{worker_state['errors']} errors)"
+    )
+
+
+@mcp.tool
+def drop_index() -> str:
+    """Clear the entire index from memory and disk."""
+    touch()
+
+    with index_lock:
+        global current_id
+        meta.clear()
+        store.clear()
+        if index is not None:
+            try:
+                index.reset()
+            except Exception:
+                pass
+        current_id = 1
+
+    persist_all()
+
+    return "Index cleared."
+
+
+@mcp.tool
+def semantic_search(query: str, top_k: int = 5) -> str:
+    """Semantic search across indexed code. Returns file paths and similarity scores."""
+    touch()
+
+    if not isinstance(query, str) or not query.strip():
+        return "Error: Query cannot be empty."
+
+    if not isinstance(top_k, int) or top_k < 1:
+        top_k = 1
+    elif top_k > 20:
+        top_k = 20
+
+    with index_lock:
+        if not store:
+            return "Index is empty. Use index_directory() or index_workspace() first."
+
+    ensure_resources()
+
+    query_vec = model.encode([query])
+    if query_vec is None or query_vec.size == 0:
+        return f"Error: Failed to embed query '{query}'."
+
+    with index_lock:
+        scores, ids = index.search(query_vec, k=top_k)
+
+    results: list[str] = []
+    for score, doc_id in zip(scores[0], ids[0]):
+        with index_lock:
+            doc = store.get(int(doc_id))
+        if doc and isinstance(doc, dict):
+            file_path = doc.get("path", "unknown")
+            content = doc.get("content", "")
+            if not isinstance(content, str):
+                content = str(content) if content is not None else ""
+            display = content[:500]
+            suffix = "..." if len(content) > 500 else ""
+            results.append(
+                f"**{file_path}** (score: {score:.4f})\n"
+                f"```\n{display}{suffix}\n```"
+            )
+
+    if not results:
+        remaining = queue_depth()
+        hint = f"\n*Note: {remaining} files still queued.*" if remaining else ""
+        return f"No results found for '{query}'.{hint}"
+
+    return "\n\n---\n\n".join(results)
+
+
+@mcp.tool
+def keyword_search(keyword: str, file_extension_filter: str = "") -> str:
+    """Exact keyword match across indexed file contents."""
+    touch()
+
+    if not isinstance(keyword, str) or not keyword.strip():
+        return "Error: Keyword cannot be empty."
+
+    with index_lock:
+        if not store:
+            return "Index is empty."
+
+        matches: list[tuple[str, str, int]] = []
+        ext_filter = file_extension_filter.strip().lower()
+        for doc_id, doc in store.items():
+            if not isinstance(doc, dict):
+                continue
+            file_path = doc.get("path", "")
+            content = doc.get("content", "")
+            if not isinstance(content, str):
+                continue
+            if ext_filter and not file_path.lower().endswith(ext_filter):
+                continue
+            if keyword.lower() in content.lower():
+                lines = content.split("\n")
+                for line_idx, line in enumerate(lines):
+                    if keyword.lower() in line.lower():
+                        matches.append((file_path, line.strip(), line_idx + 1))
+
+        if not matches:
+            return f"No matches for '{keyword}'."
+
+        MAX_RESULTS = 30
+        shown = matches[:MAX_RESULTS]
+        result = f"Found {len(matches)} matches for '{keyword}'"
+        if ext_filter:
+            result += f" in *{ext_filter} files"
+        result += ":\n\n"
+
+        for file_path, line, line_num in shown:
+            result += f"**{file_path}** (line {line_num})\n  `{line[:200]}`\n\n"
+
+        if len(matches) > MAX_RESULTS:
+            result += f"... and {len(matches) - MAX_RESULTS} more matches."
+
+        return result
+
+
+@mcp.tool
+def read_file_content(file_path: str) -> str:
+    """Read the full content of a file from disk."""
+    touch()
+
+    if not isinstance(file_path, str) or not file_path.strip():
+        return "Error: File path cannot be empty."
+    try:
+        if not os.path.isfile(file_path):
+            return f"Error: '{file_path}' is not a regular file or does not exist."
+    except Exception as e:
+        return f"Error: Cannot access '{file_path}': {e}"
+
+    try:
+        with open(file_path, "r", encoding="utf-8-sig", errors="replace") as f:
+            content = f.read()
+    except Exception as e:
+        return f"Error: Cannot read '{file_path}': {e}"
+
+    return content
 
 
 # ── Resources ──

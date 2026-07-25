@@ -28,8 +28,10 @@ class TestColdStartRecovery:
         server.meta = {"/a.py": {"id": 1, "mtime": 100, "size": 50, "last_indexed": 200}}
         server.store = {1: {"path": "/a.py", "content": "code", "mtime": 100, "size": 50, "last_indexed": 200}}
         server.current_id = 0
-        json.dump(server.meta, open(server.META_PATH, "w"))
-        json.dump({str(k): v for k, v in server.store.items()}, open(server.STORE_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump(server.meta, f)
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({str(k): v for k, v in server.store.items()}, f)
 
         server.load_and_verify()
         assert len(server.meta) == 1
@@ -38,10 +40,12 @@ class TestColdStartRecovery:
 
     def test_mismatch_rebuilds_meta_from_store(self, tmp_path):
         meta_bad = {"/gone.py": {"id": 99, "mtime": 0, "size": 0, "last_indexed": 0}}
-        json.dump(meta_bad, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump(meta_bad, f)
         store_ser = {"2": {"path": "/store_only.py", "content": "y", "mtime": 50, "size": 5, "last_indexed": 100},
                      "3": {"path": "/another.py", "content": "z", "mtime": 60, "size": 6, "last_indexed": 110}}
-        json.dump(store_ser, open(server.STORE_PATH, "w"))
+        with open(server.STORE_PATH, "w") as f:
+            json.dump(store_ser, f)
 
         server.load_and_verify()
         assert "/store_only.py" in server.meta
@@ -53,7 +57,8 @@ class TestColdStartRecovery:
         with open(server.META_PATH, "w") as f:
             f.write("not-json{")
         store_data = {1: {"path": "/a.py", "content": "x"}}
-        json.dump({str(k): v for k, v in store_data.items()}, open(server.STORE_PATH, "w"))
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({str(k): v for k, v in store_data.items()}, f)
 
         server.load_and_verify()
         assert "/a.py" in server.meta
@@ -61,7 +66,8 @@ class TestColdStartRecovery:
 
     def test_corrupt_store_empties_meta(self):
         server.meta = {"/a.py": {"id": 1, "mtime": 0, "size": 0, "last_indexed": 0}}
-        json.dump(server.meta, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump(server.meta, f)
         with open(server.STORE_PATH, "w") as f:
             f.write("not-json{")
 
@@ -71,8 +77,10 @@ class TestColdStartRecovery:
 
     def test_current_id_from_max_store_key(self):
         server.store = {5: {"path": "/a.py", "content": "x"}, 12: {"path": "/b.py", "content": "y"}}
-        json.dump({str(k): v for k, v in server.store.items()}, open(server.STORE_PATH, "w"))
-        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({str(k): v for k, v in server.store.items()}, f)
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
 
         server.load_and_verify()
         assert server.current_id == 13
@@ -143,8 +151,10 @@ class TestStorageConsistency:
         server.handle_index(str(f))
         server.persist_all()
 
-        loaded_meta = json.load(open(server.META_PATH))
-        loaded_store = json.load(open(server.STORE_PATH))
+        with open(server.META_PATH) as fh:
+            loaded_meta = json.load(fh)
+        with open(server.STORE_PATH) as fh:
+            loaded_store = json.load(fh)
         assert str(f) in loaded_meta
         assert "def test():" in loaded_store["1"]["content"]
 
@@ -157,7 +167,8 @@ class TestStorageConsistency:
         server.handle_index(str(f))
         server.persist_all()
 
-        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as fh:
+            json.dump({}, fh)
 
         server.meta = {}
         server.store = {}
@@ -172,8 +183,10 @@ class TestStorageConsistency:
 
 class TestLoadAndVerifyEdgeCases:
     def test_empty_json_files(self):
-        json.dump({}, open(server.META_PATH, "w"))
-        json.dump({}, open(server.STORE_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({}, f)
 
         server.load_and_verify()
         assert server.meta == {}
@@ -188,7 +201,8 @@ class TestLoadAndVerifyEdgeCases:
 
     def test_only_meta_exists(self):
         meta = {"/a.py": {"id": 1, "mtime": 0, "size": 0, "last_indexed": 0}}
-        json.dump(meta, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump(meta, f)
 
         server.load_and_verify()
         assert server.meta == {}
@@ -196,7 +210,8 @@ class TestLoadAndVerifyEdgeCases:
 
     def test_only_store_exists(self):
         store = {1: {"path": "/a.py", "content": "x"}}
-        json.dump({str(k): v for k, v in store.items()}, open(server.STORE_PATH, "w"))
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({str(k): v for k, v in store.items()}, f)
 
         server.load_and_verify()
         assert len(server.store) == 1
@@ -210,16 +225,20 @@ class TestLoadAndVerifyEdgeCases:
         assert server.store == {}
 
     def test_store_non_int_key_wipes_store(self):
-        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
         store = {"1": {"path": "/a.py", "content": "x"}, "not_a_number": {"path": "/b.py", "content": "y"}}
-        json.dump(store, open(server.STORE_PATH, "w"))
+        with open(server.STORE_PATH, "w") as f:
+            json.dump(store, f)
         server.load_and_verify()
         assert server.store == {}  # int("not_a_number") raises ValueError → store wiped
 
     def test_load_and_verify_handles_store_entry_without_path(self):
-        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
         store = {"1": {"content": "no_path"}}
-        json.dump(store, open(server.STORE_PATH, "w"))
+        with open(server.STORE_PATH, "w") as f:
+            json.dump(store, f)
         server.load_and_verify()
         assert 1 in server.store
         assert server.meta == {}
@@ -261,7 +280,8 @@ class TestUnicodeAndSpecialPaths:
 
 class TestCorruptStoreEntries:
     def test_load_and_verify_store_with_array(self):
-        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
         with open(server.STORE_PATH, "w") as f:
             f.write("[1, 2, 3]")
         server.load_and_verify()
@@ -269,16 +289,19 @@ class TestCorruptStoreEntries:
         assert server.meta == {}
 
     def test_load_and_verify_store_with_null(self):
-        json.dump({"/a.py": {"id": 1}}, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({"/a.py": {"id": 1}}, f)
         with open(server.STORE_PATH, "w") as f:
             f.write("null")
         server.load_and_verify()
         assert server.store == {}
 
     def test_load_and_verify_store_entry_missing_path(self):
-        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
         bad_store = {"1": {"content": "no_path_key"}}
-        json.dump(bad_store, open(server.STORE_PATH, "w"))
+        with open(server.STORE_PATH, "w") as f:
+            json.dump(bad_store, f)
         server.load_and_verify()
         assert server.store == {1: {"content": "no_path_key"}}
         assert server.meta == {}
@@ -287,8 +310,10 @@ class TestCorruptStoreEntries:
     def test_load_and_verify_meta_with_extra_paths(self):
         meta = {"/a.py": {"id": 1}, "/b.py": {"id": 2}}
         store = {1: {"path": "/a.py", "content": "x"}}
-        json.dump(meta, open(server.META_PATH, "w"))
-        json.dump({str(k): v for k, v in store.items()}, open(server.STORE_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump(meta, f)
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({str(k): v for k, v in store.items()}, f)
         server.load_and_verify()
         assert len(server.meta) == 1
         assert "/a.py" in server.meta
@@ -481,15 +506,19 @@ class TestLoadAndVerifyNonDictInMeta:
     """load_and_verify handles non-dict entries in meta/store."""
 
     def test_non_dict_meta_entry_skipped_during_rebuild(self):
-        json.dump({"/a.py": "not_a_dict", "/b.py": {"id": 1}}, open(server.META_PATH, "w"))
-        json.dump({"1": {"path": "/b.py", "content": "x"}}, open(server.STORE_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({"/a.py": "not_a_dict", "/b.py": {"id": 1}}, f)
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({"1": {"path": "/b.py", "content": "x"}}, f)
         server.load_and_verify()
         assert "/b.py" in server.meta
         assert "/a.py" not in server.meta
 
     def test_store_entry_without_path_skipped_during_rebuild(self):
-        json.dump({}, open(server.META_PATH, "w"))
-        json.dump({"1": {"content": "no_path"}}, open(server.STORE_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({"1": {"content": "no_path"}}, f)
         server.load_and_verify()
         assert len(server.store) == 1
         # Entry without path is in store but not rebuilt into meta
@@ -500,8 +529,10 @@ class TestLoadAndVerifyStoreNonDict:
     """load_and_verify handles non-dict store values."""
 
     def test_store_with_non_dict_value_rebuilds_meta(self):
-        json.dump({}, open(server.META_PATH, "w"))
-        json.dump({"1": "not a dict", "2": {"path": "/good.py", "content": "x"}}, open(server.STORE_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({"1": "not a dict", "2": {"path": "/good.py", "content": "x"}}, f)
         server.load_and_verify()
         assert 2 in server.store
         # Entry with string value "not a dict" — int("1") succeeds so store["1"] = "not a dict"
@@ -509,7 +540,8 @@ class TestLoadAndVerifyStoreNonDict:
         assert server.store[1] == "not a dict"
 
     def test_store_with_list_value_empties_store(self):
-        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
         with open(server.STORE_PATH, "w") as f:
             json.dump([1, 2, 3], f)
         server.load_and_verify()
@@ -517,8 +549,10 @@ class TestLoadAndVerifyStoreNonDict:
         assert server.meta == {}
 
     def test_store_with_non_dict_value_does_not_crash_meta_rebuild(self):
-        json.dump({}, open(server.META_PATH, "w"))
-        json.dump({"1": {"path": "/a.py", "content": "x"}, "2": "bad"}, open(server.STORE_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({"1": {"path": "/a.py", "content": "x"}, "2": "bad"}, f)
         server.load_and_verify()
         assert "/a.py" in server.meta
         assert 1 in server.store
@@ -595,9 +629,11 @@ class TestLoadAndVerifyStoreDuplicatePaths:
     """load_and_verify handles store entries with duplicate paths."""
 
     def test_duplicate_path_uses_last_entry(self):
-        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
         store = {"1": {"path": "/dup.py", "content": "first"}, "2": {"path": "/dup.py", "content": "second"}}
-        json.dump(store, open(server.STORE_PATH, "w"))
+        with open(server.STORE_PATH, "w") as f:
+            json.dump(store, f)
         server.load_and_verify()
         assert "/dup.py" in server.meta
         assert server.meta["/dup.py"]["id"] == 2
@@ -608,7 +644,8 @@ class TestLoadAndVerifyNonSerializableJson:
     """load_and_verify handles store file with malformed JSON."""
 
     def test_store_file_is_dictionary_instead_of_json(self):
-        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
         with open(server.STORE_PATH, "w") as f:
             f.write("{invalid json!!!}")
         server.load_and_verify()
@@ -736,9 +773,11 @@ class TestLoadAndVerifyEmptyStringKeys:
     """load_and_verify handles store with empty string keys."""
 
     def test_empty_string_key_raises_valueerror(self):
-        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
         store = {"": {"path": "/a.py", "content": "x"}}
-        json.dump(store, open(server.STORE_PATH, "w"))
+        with open(server.STORE_PATH, "w") as f:
+            json.dump(store, f)
         server.load_and_verify()
         assert server.store == {}
         assert server.meta == {}
@@ -769,15 +808,18 @@ class TestLoadAndVerifyStoreJsonEdgeCases:
     """load_and_verify handles malformed store JSON."""
 
     def test_store_empty_dict_clears_meta(self):
-        json.dump({"/a.py": {"id": 1}}, open(server.META_PATH, "w"))
-        json.dump({}, open(server.STORE_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({"/a.py": {"id": 1}}, f)
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({}, f)
         server.load_and_verify()
         assert server.meta == {}
         assert server.store == {}
         assert server.current_id == 1
 
     def test_store_valid_json_not_dict_fallback(self):
-        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
         with open(server.STORE_PATH, "w") as f:
             f.write('{"1": {"path": "/a.py", "content": "x"}}')
         server.load_and_verify()
@@ -786,7 +828,8 @@ class TestLoadAndVerifyStoreJsonEdgeCases:
 
     def test_store_with_pathlike_key_value(self):
         import pathlib
-        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
         store = {"1": {"path": pathlib.PurePosixPath("/a.py"), "content": "x"}}
         with open(server.STORE_PATH, "w") as f:
             json.dump(store, f, default=str)
@@ -818,8 +861,10 @@ class TestLoadAndVerifyMetaIsList:
     """load_and_verify handles meta.json being a JSON array."""
 
     def test_meta_json_array_rebuilds_from_store(self):
-        json.dump(["a", "b", "c"], open(server.META_PATH, "w"))
-        json.dump({"1": {"path": "/a.py", "content": "x"}}, open(server.STORE_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump(["a", "b", "c"], f)
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({"1": {"path": "/a.py", "content": "x"}}, f)
         server.load_and_verify()
         assert "/a.py" in server.meta
 
@@ -845,14 +890,17 @@ class TestStoreJsonFloatKey:
     """load_and_verify handles store JSON with float string key (e.g. '1.0')."""
 
     def test_float_key_wipes_store(self):
-        json.dump({}, open(server.META_PATH, "w"))
-        json.dump({"1.0": {"path": "/a.py", "content": "x"}}, open(server.STORE_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({"1.0": {"path": "/a.py", "content": "x"}}, f)
         server.load_and_verify()
         assert server.store == {}
         assert server.meta == {}
 
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 class TestCorruptedDequeItem:
     """Worker survives corrupted (non-tuple) items in the index queue."""
 
@@ -867,7 +915,7 @@ class TestCorruptedDequeItem:
         t.start()
         time.sleep(0.02)
         server._stop_event.set()
-        assert not server._stop_event.is_set() or True
+        t.join(timeout=2)
 
 
 
@@ -1007,15 +1055,19 @@ class TestLoadAndVerifyStoreNoPath:
     """load_and_verify handles store entry that lacks a 'path' key entirely."""
 
     def test_entry_without_path_skipped(self):
-        json.dump({}, open(server.META_PATH, "w"))
-        json.dump({"1": {"content": "orphan"}}, open(server.STORE_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({"1": {"content": "orphan"}}, f)
         server.load_and_verify()
         assert 1 in server.store
         assert server.meta == {}
 
     def test_entry_with_none_path_skipped(self):
-        json.dump({}, open(server.META_PATH, "w"))
-        json.dump({"1": {"path": None, "content": "x"}}, open(server.STORE_PATH, "w"))
+        with open(server.META_PATH, "w") as f:
+            json.dump({}, f)
+        with open(server.STORE_PATH, "w") as f:
+            json.dump({"1": {"path": None, "content": "x"}}, f)
         server.load_and_verify()
         assert 1 in server.store
         assert server.meta == {}

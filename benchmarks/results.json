@@ -1,0 +1,44 @@
+{
+  "cold_start": {
+    "index_init": 0.0,
+    "model_load": 0.0052
+  },
+  "indexing": {
+    "num_files": 100,
+    "total_sec": 2.41,
+    "files_per_sec": 41.5,
+    "mean_ms": 24.1,
+    "median_ms": 13.2,
+    "p95_ms": 24.0,
+    "p99_ms": 45.06,
+    "errors": 0,
+    "indexed": 100
+  },
+  "search": {
+    "semantic_k3": {
+      "mean_ms": 3.49,
+      "median_ms": 3.38,
+      "p95_ms": 4.77,
+      "p99_ms": 5.2
+    },
+    "semantic_k5": {
+      "mean_ms": 3.46,
+      "median_ms": 3.36,
+      "p95_ms": 4.46,
+      "p99_ms": 5.28
+    },
+    "semantic_k10": {
+      "mean_ms": 3.54,
+      "median_ms": 3.39,
+      "p95_ms": 4.73,
+      "p99_ms": 5.79
+    },
+    "keyword": {
+      "mean_ms": 0.11,
+      "median_ms": 0.11,
+      "p95_ms": 0.13,
+      "p99_ms": 0.2
+    }
+  },
+  "memory_mb": 0
+}

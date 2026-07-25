@@ -661,6 +661,7 @@ class TestDequeueBatchEdgeTypes:
 
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 class TestBackgroundWorkerDequeueException:
     """Worker survives dequeue_batch raising an exception."""
 

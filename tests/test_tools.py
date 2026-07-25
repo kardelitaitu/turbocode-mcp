@@ -275,6 +275,54 @@ class TestTouchCalledByToolsAndResources:
         server.index_stats()
         mock_touch.assert_called_once()
 
+    def test_index_workspace_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        mocker.patch("os.path.exists", return_value=True)
+        mocker.patch("os.path.isdir", return_value=True)
+        mocker.patch("os.walk", return_value=[])
+        mocker.patch("server.ensure_resources")
+        server.index_workspace("/ws")
+        mock_touch.assert_called_once()
+
+    def test_update_file_index_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        mocker.patch("os.path.isfile", return_value=True)
+        mocker.patch("server.handle_index")
+        mocker.patch("server.persist_all")
+        server.update_file_index("/f.py")
+        mock_touch.assert_called_once()
+
+    def test_get_index_status_tool_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        server.get_index_status()
+        mock_touch.assert_called_once()
+
+    def test_drop_index_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        mocker.patch("server.persist_all")
+        server.drop_index()
+        mock_touch.assert_called_once()
+
+    def test_semantic_search_calls_touch(self, mocker, mock_model, mock_index):
+        mock_touch = mocker.patch("server.touch")
+        server.store[1] = {"path": "/d.py", "content": "x"}
+        server.semantic_search("test")
+        mock_touch.assert_called_once()
+
+    def test_keyword_search_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        with server.index_lock:
+            server.store[1] = {"path": "/a.py", "content": "hello"}
+        server.keyword_search("hello")
+        mock_touch.assert_called_once()
+
+    def test_read_file_content_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        mocker.patch("os.path.isfile", return_value=True)
+        mocker.patch("builtins.open", mocker.mock_open(read_data="x"))
+        server.read_file_content("/f.py")
+        mock_touch.assert_called_once()
+
 
 
 class TestMainLoadAndVerifyCrashLogsWarning:
@@ -362,6 +410,278 @@ class TestMainMakedirsFailure:
         captured = capsys.readouterr()
         assert "Cannot create" in captured.err
 
+
+
+class TestIndexWorkspace:
+    """Tests for the index_workspace tool."""
+
+    def test_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        mocker.patch("os.path.exists", return_value=True)
+        mocker.patch("os.path.isdir", return_value=True)
+        mocker.patch("os.walk", return_value=[])
+        mocker.patch("server.ensure_resources")
+        server.index_workspace("/ws")
+        mock_touch.assert_called_once()
+
+    def test_empty_path(self):
+        result = server.index_workspace("")
+        assert "Error" in result
+
+    def test_missing_dir(self, mocker):
+        mocker.patch("os.path.exists", return_value=False)
+        result = server.index_workspace("/nonexistent")
+        assert "not found" in result
+
+    def test_not_a_directory(self, mocker):
+        mocker.patch("os.path.exists", return_value=True)
+        mocker.patch("os.path.isdir", return_value=False)
+        result = server.index_workspace("/tmp/file")
+        assert "is a file" in result
+
+    def test_finds_new_files(self, mocker):
+        mocker.patch("os.path.exists", return_value=True)
+        mocker.patch("os.path.isdir", return_value=True)
+        mocker.patch("os.walk", return_value=[("/ws", [], ["main.py", "lib.rs", "app.js", "comp.ts", "readme.md"])])
+        mocker.patch("server.ensure_resources")
+        result = server.index_workspace("/ws")
+        assert "5 new" in result
+
+    def test_skips_unsupported_extensions(self, mocker):
+        mocker.patch("os.path.exists", return_value=True)
+        mocker.patch("os.path.isdir", return_value=True)
+        mocker.patch("os.walk", return_value=[("/ws", [], ["main.py", "data.json", "image.png", "notes.txt"])])
+        mocker.patch("server.ensure_resources")
+        result = server.index_workspace("/ws")
+        assert "1 new" in result  # only main.py
+
+    def test_empty_results_all_up_to_date(self, mocker, tmp_path):
+        d = tmp_path / "proj"
+        d.mkdir()
+        f1 = d / "file1.py"
+        f2 = d / "file2.rs"
+        f1.write_text("x")
+        f2.write_text("y")
+        fp1, fp2 = str(f1), str(f2)
+        server.meta[fp1] = {"id": 1, "mtime": os.path.getmtime(fp1), "size": 1, "last_indexed": 2000.0}
+        server.meta[fp2] = {"id": 2, "mtime": os.path.getmtime(fp2), "size": 1, "last_indexed": 2001.0}
+        mocker.patch("server.ensure_resources")
+        result = server.index_workspace(str(d))
+        assert "up to date" in result
+
+    def test_permission_error(self, mocker):
+        mocker.patch("os.path.exists", return_value=True)
+        mocker.patch("os.path.isdir", return_value=True)
+        mocker.patch("os.walk", side_effect=PermissionError("denied"))
+        mocker.patch("server.ensure_resources")
+        result = server.index_workspace("/proj")
+        assert "Permission denied" in result
+
+
+
+class TestUpdateFileIndex:
+    """Tests for the update_file_index tool."""
+
+    def test_calls_touch(self, mocker, mock_model, mock_index):
+        mock_touch = mocker.patch("server.touch")
+        mocker.patch("os.path.isfile", return_value=True)
+        mocker.patch("server.handle_index")
+        mocker.patch("server.persist_all")
+        server.update_file_index("/tmp/f.py")
+        mock_touch.assert_called_once()
+
+    def test_empty_path(self):
+        result = server.update_file_index("")
+        assert "Error" in result
+
+    def test_file_not_found(self, mocker):
+        mocker.patch("os.path.isfile", return_value=False)
+        mocker.patch("server.persist_all")
+        result = server.update_file_index("/nonexistent.py")
+        assert "not a regular file" in result
+
+    def test_valid_file(self, mocker, mock_model, mock_index):
+        mocker.patch("os.path.isfile", return_value=True)
+        mocker.patch("server.handle_index", return_value=None)
+        mock_persist = mocker.patch("server.persist_all")
+        result = server.update_file_index("/tmp/f.py")
+        assert "Re-indexed" in result
+        mock_persist.assert_called_once()
+
+    def test_handle_index_failure(self, mocker, mock_model, mock_index):
+        mocker.patch("os.path.isfile", return_value=True)
+        mocker.patch("server.handle_index", side_effect=RuntimeError("crash"))
+        result = server.update_file_index("/tmp/f.py")
+        assert "Failed to re-index" in result
+
+
+
+class TestGetIndexStatus:
+    """Tests for the get_index_status tool."""
+
+    def test_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        server.get_index_status()
+        mock_touch.assert_called_once()
+
+    def test_returns_status(self, populated_state):
+        result = server.get_index_status()
+        assert "Files tracked" in result
+        assert "3" in result
+
+    def test_empty_index(self):
+        result = server.get_index_status()
+        assert "Files tracked: 0" in result
+        assert "Vectors: 0" in result
+
+
+
+class TestDropIndex:
+    """Tests for the drop_index tool."""
+
+    def test_calls_touch(self, mocker, mock_model, mock_index):
+        mock_touch = mocker.patch("server.touch")
+        mocker.patch("server.persist_all")
+        server.drop_index()
+        mock_touch.assert_called_once()
+
+    def test_clears_meta_and_store(self, populated_state, mocker, mock_index):
+        mocker.patch("server.persist_all")
+        assert len(server.meta) == 3
+        assert len(server.store) == 3
+        server.drop_index()
+        assert len(server.meta) == 0
+        assert len(server.store) == 0
+        assert server.current_id == 1
+
+    def test_resets_index(self, mocker):
+        mock_idx = mocker.MagicMock()
+        mocker.patch("server.persist_all")
+        server.index = mock_idx
+        server.meta["/a.py"] = {"id": 1}
+        server.store[1] = {"path": "/a.py"}
+        server.drop_index()
+        mock_idx.reset.assert_called_once()
+        assert len(server.meta) == 0
+
+    def test_no_index_does_not_crash(self, mocker):
+        mocker.patch("server.persist_all")
+        server.index = None
+        server.meta["/a.py"] = {"id": 1}
+        server.drop_index()
+        assert len(server.meta) == 0
+
+
+
+class TestSemanticSearch:
+    """Tests for the semantic_search tool."""
+
+    def test_calls_touch(self, mocker, mock_model, mock_index):
+        mock_touch = mocker.patch("server.touch")
+        server.store[1] = {"path": "/d.py", "content": "test"}
+        result = server.semantic_search("query")
+        mock_touch.assert_called_once()
+
+    def test_empty_query(self):
+        result = server.semantic_search("")
+        assert "Error" in result
+
+    def test_returns_results(self, mocker, mock_model, mock_index):
+        server.store[1] = {"path": "/a.py", "content": "def foo(): pass"}
+        result = server.semantic_search("test query")
+        assert "/a.py" in result
+        assert "score:" in result
+
+    def test_no_results(self, mock_model, mock_index):
+        mock_index.search.return_value = (np.array([[float("-inf")]]), np.array([[0]], dtype=np.uint64))
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        result = server.semantic_search("nothing")
+        assert "No results" in result or "no results" in result.lower()
+
+    def test_empty_store(self):
+        result = server.semantic_search("test")
+        assert "empty" in result
+
+
+
+class TestKeywordSearch:
+    """Tests for the keyword_search tool."""
+
+    def test_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        with server.index_lock:
+            server.store[1] = {"path": "/a.py", "content": "hello world"}
+        server.keyword_search("hello")
+        mock_touch.assert_called_once()
+
+    def test_empty_keyword(self):
+        result = server.keyword_search("")
+        assert "Error" in result
+
+    def test_finds_match(self):
+        with server.index_lock:
+            server.store[1] = {"path": "/a.py", "content": "def hello(): pass"}
+        result = server.keyword_search("hello")
+        assert "/a.py" in result
+        assert "1 matches" in result
+
+    def test_no_match(self):
+        with server.index_lock:
+            server.store[1] = {"path": "/a.py", "content": "def foo(): pass"}
+        result = server.keyword_search("bar")
+        assert "No matches" in result
+
+    def test_empty_store(self):
+        result = server.keyword_search("hello")
+        assert "empty" in result
+
+    def test_extension_filter(self):
+        with server.index_lock:
+            server.store[1] = {"path": "/a.py", "content": "common"}
+            server.store[2] = {"path": "/b.rs", "content": "common"}
+        result = server.keyword_search("common", ".py")
+        assert "/a.py" in result
+        assert "/b.rs" not in result
+
+    def test_case_insensitive(self):
+        with server.index_lock:
+            server.store[1] = {"path": "/a.py", "content": "HelloWorld"}
+        result = server.keyword_search("helloworld")
+        assert "1 matches" in result
+
+
+
+class TestReadFileContent:
+    """Tests for the read_file_content tool."""
+
+    def test_calls_touch(self, mocker):
+        mock_touch = mocker.patch("server.touch")
+        mocker.patch("os.path.isfile", return_value=True)
+        mocker.patch("builtins.open", mocker.mock_open(read_data="content"))
+        server.read_file_content("/tmp/f.py")
+        mock_touch.assert_called_once()
+
+    def test_empty_path(self):
+        result = server.read_file_content("")
+        assert "Error" in result
+
+    def test_file_not_found(self, mocker):
+        mocker.patch("os.path.isfile", return_value=False)
+        result = server.read_file_content("/nonexistent.py")
+        assert "not a regular file" in result or "does not exist" in result
+
+    def test_reads_full_content(self, mocker):
+        content = "line1\nline2\nline3\n"
+        mocker.patch("os.path.isfile", return_value=True)
+        mocker.patch("builtins.open", mocker.mock_open(read_data=content))
+        result = server.read_file_content("/tmp/f.py")
+        assert result == content
+
+    def test_read_error(self, mocker):
+        mocker.patch("os.path.isfile", return_value=True)
+        mocker.patch("builtins.open", side_effect=PermissionError("denied"))
+        result = server.read_file_content("/tmp/f.py")
+        assert "Cannot read" in result
 
 
 class TestMainMcpRunRaises:

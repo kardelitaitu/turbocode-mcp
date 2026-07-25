@@ -1034,6 +1034,7 @@ class TestBackgroundWorkerEncodeFailureMixedBatch:
 
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 class TestWorkerKilledByBaseException:
     """Worker thread dies when handle_index raises BaseException (not caught by except Exception)."""
 

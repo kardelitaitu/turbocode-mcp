@@ -43,10 +43,14 @@ class TestAtomicPersistence:
         assert os.path.exists(server.META_PATH)
         assert os.path.exists(server.STORE_PATH)
 
-        meta_loaded = json.load(open(server.META_PATH))
+        with open(server.META_PATH) as f:
+
+            meta_loaded = json.load(f)
         assert "/proj/file1.py" in meta_loaded
 
-        store_loaded = json.load(open(server.STORE_PATH))
+        with open(server.STORE_PATH) as f:
+
+            store_loaded = json.load(f)
         assert "1" in store_loaded
         assert store_loaded["1"]["path"] == "/proj/file1.py"
 
@@ -68,7 +72,8 @@ class TestPersistenceRobustness:
         server.persist_all()
 
         mtime_before = os.path.getmtime(server.META_PATH)
-        content_before = open(server.META_PATH).read()
+        with open(server.META_PATH) as f:
+            content_before = f.read()
 
         mock_write = mocker.patch.object(server, "atomic_write")
         mock_write.side_effect = [None, Exception("crash during store write")]
@@ -79,7 +84,8 @@ class TestPersistenceRobustness:
             pass
 
         assert os.path.exists(server.META_PATH)
-        assert open(server.META_PATH).read() == content_before
+        with open(server.META_PATH) as f:
+            assert f.read() == content_before
 
 
 
@@ -92,7 +98,7 @@ class TestAtomicWriteEdgeCases:
     def test_atomic_write_normal_works(self, tmp_path):
         f = tmp_path / "test.json"
         server.atomic_write(str(f), '{"key": "value"}')
-        assert json.loads(open(str(f)).read()) == {"key": "value"}
+        assert json.loads(f.read_text()) == {"key": "value"}
 
 
 class TestPersistAllEdgeCases:
@@ -480,7 +486,8 @@ class TestPersistAllStoreEdgeCases:
         server.meta["/a.py"] = {"id": 1, "mtime": 100, "size": 10, "last_indexed": 200}
         server.store[1] = {"path": "/a.py", "content": None}
         server.persist_all()
-        stored = json.load(open(server.STORE_PATH))
+        with open(server.STORE_PATH) as f:
+            stored = json.load(f)
         assert stored["1"]["content"] is None
 
 
@@ -766,7 +773,8 @@ class TestPersistAllNonSerializableMeta:
         server.meta["/f.py"] = {"id": 1, "data": b"bytes_data"}
         server.persist_all()
         assert os.path.exists(server.META_PATH)
-        loaded = json.load(open(server.META_PATH))
+        with open(server.META_PATH) as f:
+            loaded = json.load(f)
         assert "/f.py" in loaded
 
     def test_set_value_in_meta_serializes(self, mock_index):
