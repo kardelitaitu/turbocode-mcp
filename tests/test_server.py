@@ -5999,3 +5999,349 @@ class TestWorkerStateNotLeakedAcrossBatches:
         server._stop_event.set()
         assert server.worker_state["errors"] >= 1
         assert server.worker_state["processed"] >= 1
+
+
+class TestHandleIndexIsFileOSError:
+    """handle_index skips gracefully when os.path.isfile raises OSError."""
+
+    def test_isfile_oserror_skips(self, tmp_path, mock_model, mock_index, mocker):
+        f = tmp_path / "test.py"
+        f.write_text("x = 1")
+        mocker.patch.object(os.path, "isfile", side_effect=OSError("permission denied"))
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert len(server.store) == 0
+
+    def test_isfile_oserror_does_not_crash_worker(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mocker.patch.object(os.path, "isfile", side_effect=OSError("access denied"))
+        f = tmp_path / "test.py"
+        f.write_text("x = 1")
+        server.enqueue("new", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.02)
+        server._stop_event.set()
+        assert server.worker_state["errors"] == 0
+
+
+class TestMainStaleTmpCleanup:
+    """main() cleans up stale .tmp files from previous crashes."""
+
+    def test_cleans_stale_index_tmp(self, mocker):
+        open(server.INDEX_PATH + ".tmp", "w").close()
+        mocker.patch("server.validate_environment")
+        mocker.patch("os.makedirs")
+        mocker.patch("server.load_and_verify")
+        mocker.patch("threading.Thread")
+        mocker.patch("server.sig_module.signal")
+        mocker.patch("server.mcp.run")
+        server.main()
+        assert not os.path.exists(server.INDEX_PATH + ".tmp")
+
+    def test_cleans_stale_meta_tmp(self, mocker):
+        open(server.META_PATH + ".tmp", "w").close()
+        mocker.patch("server.validate_environment")
+        mocker.patch("os.makedirs")
+        mocker.patch("server.load_and_verify")
+        mocker.patch("threading.Thread")
+        mocker.patch("server.sig_module.signal")
+        mocker.patch("server.mcp.run")
+        server.main()
+        assert not os.path.exists(server.META_PATH + ".tmp")
+
+    def test_cleans_stale_all_tmp_files(self, mocker):
+        for p in [server.INDEX_PATH, server.META_PATH, server.STORE_PATH]:
+            open(p + ".tmp", "w").close()
+        mocker.patch("server.validate_environment")
+        mocker.patch("os.makedirs")
+        mocker.patch("server.load_and_verify")
+        mocker.patch("threading.Thread")
+        mocker.patch("server.sig_module.signal")
+        mocker.patch("server.mcp.run")
+        server.main()
+        for p in [server.INDEX_PATH, server.META_PATH, server.STORE_PATH]:
+            assert not os.path.exists(p + ".tmp"), f"Stale tmp not cleaned: {p}.tmp"
+
+
+class TestMainMakedirsFailure:
+    """main() handles os.makedirs failure gracefully."""
+
+    def test_makedirs_failure_logs_warning(self, mocker, capsys):
+        mocker.patch("server.validate_environment")
+        mocker.patch("os.makedirs", side_effect=PermissionError("access denied"))
+        mocker.patch("server.load_and_verify")
+        mocker.patch("threading.Thread")
+        mocker.patch("server.sig_module.signal")
+        mocker.patch("server.mcp.run")
+        server.main()
+        captured = capsys.readouterr()
+        assert "Cannot create" in captured.err
+
+
+class TestIndexDirectoryGenericOSError:
+    """index_directory handles generic OSError from os.walk."""
+
+    def test_oserror_returns_cannot_read_message(self, tmp_path, mocker):
+        d = tmp_path / "proj"
+        d.mkdir()
+        mocker.patch("os.walk", side_effect=OSError("stale network handle"))
+        result = server.index_directory(str(d))
+        assert "Error" in result
+        assert "Cannot read" in result
+
+
+class TestHandleIndexEncodeCrash:
+    """Worker catches model.encode crash in handle_index."""
+
+    def test_encode_raise_caught_by_worker(self, tmp_path, mock_model, mock_index, mocker):
+        mock_model.encode.side_effect = RuntimeError("OOM during encoding")
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        f = tmp_path / "crash.py"
+        f.write_text("x = 1")
+        server.current_id = 1
+        server.enqueue("new", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.02)
+        server._stop_event.set()
+        assert server.worker_state["errors"] >= 1
+        assert "OOM" in (server.worker_state["last_error"] or "")
+
+    def test_encode_raise_crash_preserves_queue(self, tmp_path, mock_model, mock_index, mocker):
+        mock_model.encode.side_effect = RuntimeError("encode fail")
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        f1 = tmp_path / "f1.py"
+        f1.write_text("x")
+        f2 = tmp_path / "f2.py"
+        f2.write_text("y")
+        server.current_id = 1
+        server.enqueue("new", str(f1))
+        server.enqueue("new", str(f2))
+
+        class ResetEncode:
+            call_count = 0
+            def __call__(self, *a, **kw):
+                self.call_count += 1
+                if self.call_count == 1:
+                    raise RuntimeError("encode fail")
+                return np.random.rand(1, 384).astype(np.float32)
+
+        mock_model.encode.side_effect = ResetEncode()
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.05)
+        server._stop_event.set()
+        assert server.worker_state["processed"] >= 1
+        assert server.worker_state["errors"] >= 1
+
+
+class TestLoadAndVerifyMetaIsList:
+    """load_and_verify handles meta.json being a JSON array."""
+
+    def test_meta_json_array_rebuilds_from_store(self):
+        json.dump(["a", "b", "c"], open(server.META_PATH, "w"))
+        json.dump({"1": {"path": "/a.py", "content": "x"}}, open(server.STORE_PATH, "w"))
+        server.load_and_verify()
+        assert "/a.py" in server.meta
+
+
+class TestWorkerStateLastErrorPersistence:
+    """worker_state['last_error'] is not reset by successful batches."""
+
+    def test_last_error_persists_after_ok_batch(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        server.worker_state["last_error"] = "previous error"
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.enqueue("new", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.02)
+        server._stop_event.set()
+        assert server.worker_state["last_error"] == "previous error"
+
+
+class TestBackgroundWorkerStopEventPreset:
+    """background_worker exits immediately if _stop_event is already set."""
+
+    def test_worker_exits_immediately(self, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        server._stop_event.set()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        t.join(timeout=1)
+        assert not t.is_alive()
+
+
+class TestMainMcpRunRaises:
+    """main() propagates exception from mcp.run()."""
+
+    def test_mcp_run_raises_propagates(self, mocker):
+        mocker.patch("server.validate_environment")
+        mocker.patch("os.makedirs")
+        mocker.patch("server.load_and_verify")
+        mocker.patch("threading.Thread")
+        mocker.patch("server.sig_module.signal")
+        mocker.patch("server.mcp.run", side_effect=RuntimeError("mcp crashed"))
+        with pytest.raises(RuntimeError, match="mcp crashed"):
+            server.main()
+
+
+class TestHandleIndexSingleCharFile:
+    """handle_index with a 1-character file (boundary test)."""
+
+    def test_single_char_file_indexed(self, tmp_path, mock_model, mock_index):
+        mock_index.add_with_ids.return_value = None
+        mock_index.add_with_ids.side_effect = None
+        f = tmp_path / "tiny.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert 1 in server.store
+        assert server.store[1]["content"] == "x"
+
+
+class TestEnsureModelImportFailure:
+    """ensure_model propagates ImportError from sentence_transformers import."""
+
+    def test_import_failure_propagates(self, mocker):
+        server.model = None
+        import builtins
+        original_import = builtins.__import__
+        def fake_import(name, *args, **kw):
+            if name == "sentence_transformers":
+                raise ImportError("no module named sentence_transformers")
+            return original_import(name, *args, **kw)
+        mocker.patch.object(builtins, "__import__", side_effect=fake_import)
+        with pytest.raises(ImportError, match="sentence_transformers"):
+            server.ensure_model()
+
+
+class TestHandleIndexOldEntryNonDict:
+    """handle_index tolerates meta entries that are not dicts for old_entry."""
+
+    def test_non_dict_old_entry_indexed_as_new(self, tmp_path, mock_model, mock_index):
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.meta[str(f)] = "not_a_dict"
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert str(f) in server.meta
+        assert isinstance(server.meta[str(f)], dict)
+
+
+class TestPersistAllNonSerializableMeta:
+    """persist_all serializes non-serializable meta values using default=str."""
+
+    def test_bytes_value_in_meta_serializes(self, mock_index):
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        server.meta["/f.py"] = {"id": 1, "data": b"bytes_data"}
+        server.persist_all()
+        assert os.path.exists(server.META_PATH)
+        loaded = json.load(open(server.META_PATH))
+        assert "/f.py" in loaded
+
+    def test_set_value_in_meta_serializes(self, mock_index):
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        server.meta["/f.py"] = {"id": 1, "tags": {"a", "b"}}
+        server.persist_all()
+        assert os.path.exists(server.META_PATH)
+
+
+class TestHandleRemoveIdNone:
+    """handle_remove with meta entry having id=None."""
+
+    def test_id_none_still_removes_from_meta(self, mock_index):
+        server.meta["/f.py"] = {"id": None, "mtime": 0, "size": 0, "last_indexed": 0}
+        server.handle_remove("/f.py")
+        assert "/f.py" not in server.meta
+
+
+class TestHandleIndexOldVectorBaseException:
+    """BaseException from index.remove during reindex propagates."""
+
+    def test_old_vector_remove_baseexception_propagates(self, tmp_path, mock_model, mock_index):
+        class CustomBase(BaseException):
+            pass
+
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "f.py"
+        f.write_text("original")
+        server.current_id = 1
+        server.handle_index(str(f))
+        mock_index.remove.side_effect = CustomBase("fatal")
+        f.write_text("modified")
+        with pytest.raises(CustomBase, match="fatal"):
+            server.handle_index(str(f))
+
+
+class TestIndexDirectoryEmptyString:
+    """index_directory rejects empty string directory path."""
+
+    def test_empty_string_returns_error(self):
+        result = server.index_directory("")
+        assert "Error" in result
+        assert "empty" in result.lower()
+
+    def test_whitespace_only_returns_error(self):
+        result = server.index_directory("   ")
+        assert "Error" in result
+        assert "empty" in result.lower()
+
+
+class TestHandleRemoveIdNoneInMetaStorePresent:
+    """handle_remove with id=None but store entry present."""
+
+    def test_id_none_with_store_entry_meta_removed(self, mock_index):
+        server.meta["/f.py"] = {"id": None, "mtime": 0, "size": 0, "last_indexed": 0}
+        server.store[42] = {"path": "/f.py", "content": "x"}
+        server.handle_remove("/f.py")
+        assert "/f.py" not in server.meta
+        assert 42 in server.store  # store entry for unrelated id is preserved
+
+
+class TestBackgroundWorkerEncodeFailureMixedBatch:
+    """Worker handles mixed batch where some files fail encoding."""
+
+    def test_mixed_encode_fails_and_succeeds(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+
+        class FlakyEncode:
+            call_count = 0
+            def __call__(self, items):
+                self.call_count += 1
+                if self.call_count == 1:
+                    raise RuntimeError("encode fail on first")
+                return np.random.rand(1, 384).astype(np.float32)
+
+        mock_model.encode.side_effect = FlakyEncode()
+        f1 = tmp_path / "f1.py"
+        f1.write_text("x")
+        f2 = tmp_path / "f2.py"
+        f2.write_text("y")
+        server.current_id = 1
+        server.enqueue("new", str(f1))
+        server.enqueue("new", str(f2))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.05)
+        server._stop_event.set()
+        assert server.worker_state["errors"] >= 1
+        assert server.worker_state["processed"] >= 1

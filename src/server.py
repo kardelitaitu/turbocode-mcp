@@ -371,8 +371,12 @@ def handle_index(file_path: str) -> None:
         return
 
     # I/O: no lock needed
-    if not os.path.isfile(file_path):
-        log(f"WARNING: Not a regular file — skipping {file_path}.")
+    try:
+        if not os.path.isfile(file_path):
+            log(f"WARNING: Not a regular file — skipping {file_path}.")
+            return
+    except Exception:
+        log(f"WARNING: Cannot stat {file_path} for file type check. Skipping.")
         return
     try:
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:

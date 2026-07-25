@@ -529,4 +529,261 @@ describe('Runtime behavior', () => {
     const version = cli.getVersion();
     assert.match(version, /^\d+\.\d+\.\d+$|^unknown$/);
   });
+
+  it('cli.main exits cleanly for -h short flag', () => {
+    const exitTrap = makeExitTrap();
+    let spawned = false;
+    const originalLog = console.log;
+    console.log = () => {};
+
+    try {
+      assert.throws(() => {
+        cli.main({
+          argv: ['-h'],
+          fs: { existsSync: () => true },
+          spawn: () => { spawned = true; throw new Error('spawn'); },
+          exit: (code) => { exitTrap.exit(code); throw new Error(`exit ${code}`); },
+        });
+      }, /exit 0/);
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.deepStrictEqual(exitTrap.codes, [0]);
+    assert.strictEqual(spawned, false);
+  });
+
+  it('cli.main exits cleanly for -v short flag', () => {
+    const exitTrap = makeExitTrap();
+    let spawned = false;
+    const originalLog = console.log;
+    console.log = () => {};
+
+    try {
+      assert.throws(() => {
+        cli.main({
+          argv: ['-v'],
+          fs: { existsSync: () => true },
+          spawn: () => { spawned = true; throw new Error('spawn'); },
+          exit: (code) => { exitTrap.exit(code); throw new Error(`exit ${code}`); },
+        });
+      }, /exit 0/);
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.deepStrictEqual(exitTrap.codes, [0]);
+    assert.strictEqual(spawned, false);
+  });
+
+  it('cli.main spawn error event calls exit(1)', () => {
+    const child = new EventEmitter();
+    const exitTrap = makeExitTrap();
+    const logs = [];
+
+    cli.main({
+      fs: { existsSync: () => true },
+      paths: { pythonExecutable: '/fake/python', serverScript: '/fake/server.py' },
+      spawn: () => child,
+      exit: (code) => exitTrap.exit(code),
+      log: (msg) => logs.push(msg),
+    });
+
+    child.emit('error', new Error('ENOENT'));
+    assert.deepStrictEqual(exitTrap.codes, [1]);
+    assert.ok(logs.some(l => l.includes('ENOENT')));
+  });
+
+  it('cli.main child exit with non-zero code calls exit with that code', () => {
+    const child = new EventEmitter();
+    const exitTrap = makeExitTrap();
+    const originalOn = process.on;
+    process.on = () => process;
+
+    try {
+      cli.main({
+        fs: { existsSync: () => true },
+        paths: { pythonExecutable: '/fake/python', serverScript: '/fake/server.py' },
+        spawn: () => child,
+        exit: (code) => exitTrap.exit(code),
+      });
+
+      child.emit('exit', 42, null);
+      assert.deepStrictEqual(exitTrap.codes, [42]);
+    } finally {
+      process.on = originalOn;
+    }
+  });
+
+  it('cli.main child exit with zero code calls exit(0)', () => {
+    const child = new EventEmitter();
+    const exitTrap = makeExitTrap();
+    const originalOn = process.on;
+    process.on = () => process;
+
+    try {
+      cli.main({
+        fs: { existsSync: () => true },
+        paths: { pythonExecutable: '/fake/python', serverScript: '/fake/server.py' },
+        spawn: () => child,
+        exit: (code) => exitTrap.exit(code),
+      });
+
+      child.emit('exit', 0, null);
+      assert.deepStrictEqual(exitTrap.codes, [0]);
+    } finally {
+      process.on = originalOn;
+    }
+  });
+
+  it('cli.main spawns with default argv when no argv provided', () => {
+    const child = new EventEmitter();
+    child.kill = () => {};
+    const spawnCalls = [];
+    const originalArgv = process.argv;
+    const originalOn = process.on;
+    process.on = () => process;
+
+    try {
+      process.argv = ['node', 'cli.js'];
+      cli.main({
+        fs: { existsSync: () => true },
+        paths: { pythonExecutable: '/fake/python', serverScript: '/fake/server.py' },
+        spawn: (cmd, args, opts) => {
+          spawnCalls.push({ cmd, args, opts });
+          return child;
+        },
+        exit: (code) => { throw new Error(`unexpected exit ${code}`); },
+      });
+
+      assert.strictEqual(spawnCalls.length, 1);
+      assert.strictEqual(spawnCalls[0].cmd, '/fake/python');
+      assert.deepStrictEqual(spawnCalls[0].args, ['/fake/server.py']);
+    } finally {
+      process.argv = originalArgv;
+      process.on = originalOn;
+    }
+  });
+
+  it('cli.main handles unknown flags by spawning normally', () => {
+    const child = new EventEmitter();
+    child.kill = () => {};
+    const spawnCalls = [];
+    const originalOn = process.on;
+    process.on = () => process;
+
+    try {
+      cli.main({
+        argv: ['--unknown-flag', '--another=value'],
+        fs: { existsSync: () => true },
+        paths: { pythonExecutable: '/fake/python', serverScript: '/fake/server.py' },
+        spawn: (cmd, args, opts) => {
+          spawnCalls.push({ cmd, args, opts });
+          return child;
+        },
+        exit: (code) => { throw new Error(`unexpected exit ${code}`); },
+      });
+
+      assert.strictEqual(spawnCalls.length, 1);
+      // unknown flags should not prevent normal spawn
+      assert.strictEqual(spawnCalls[0].args[0], '/fake/server.py');
+    } finally {
+      process.on = originalOn;
+    }
+  });
+
+  it('setup.run uses default opts when no opts passed', () => {
+    let capturedOpts = null;
+    setup.run('test-cmd', undefined, {
+      execSync: (cmd, opts) => {
+        capturedOpts = opts;
+      },
+      exit: (code) => { throw new Error('should not exit'); },
+    });
+    assert.strictEqual(capturedOpts.stdio, 'inherit');
+  });
+
+  it('setup.findPython uses defaults when no options', () => {
+    const execCalls = [];
+    const candidateMap = {
+      python3: () => 'Python 3.11.4',
+      python: () => { throw new Error('missing'); },
+    };
+
+    const result = setup.findPython({
+      execSync: (cmd) => {
+        execCalls.push(cmd);
+        const name = cmd.split(' ')[0];
+        return candidateMap[name]();
+      },
+      exit: (code) => { throw new Error(`unexpected exit ${code}`); },
+    });
+
+    // Default order on non-Windows: python3 first
+    assert.strictEqual(result, 'python3');
+  });
+
+  it('setup.main with Windows paths uses python.exe and pip.exe', () => {
+    const project = createTempProject();
+    fs.rmSync(project.venvDir, { recursive: true, force: true });
+    const wins = { ...project, binDir: project.venvDir + '\\Scripts' };
+    fs.mkdirSync(wins.binDir, { recursive: true });
+    const winsPip = wins.binDir + '\\pip.exe';
+    const winsPython = wins.binDir + '\\python.exe';
+    fs.writeFileSync(winsPip, '', 'utf-8');
+    fs.writeFileSync(winsPython, '', 'utf-8');
+
+    const runCalls = [];
+    setup.main({
+      fs,
+      isWin: true,
+      paths: {
+        venvDir: project.venvDir,
+        requirements: project.requirements,
+        pythonBin: winsPython,
+        pipPath: winsPip,
+      },
+      findPython: () => 'python',
+      log: () => {},
+      error: () => {},
+      exit: (code) => { throw new Error(`unexpected exit ${code}`); },
+      run: (cmd) => runCalls.push(cmd),
+    });
+
+    assert.ok(runCalls.some(c => c.includes('python.exe') || c.includes('pip.exe')));
+  });
+
+  it('setup.main exits when pip not found after venv creation', () => {
+    const exitTrap = makeExitTrap();
+    const errors = [];
+
+    assert.throws(() => {
+      setup.main({
+        fs: {
+          existsSync: (target) =>
+            target === '/fake/venv' ||          // venvDir exists — skip creation
+            target === '/fake/requirements.txt', // requirements exist
+            // pipPath does NOT exist → step 2 fails
+        },
+        isWin: false,
+        paths: {
+          venvDir: '/fake/venv',
+          requirements: '/fake/requirements.txt',
+          pipPath: '/fake/venv/bin/pip',
+          pythonBin: '/fake/venv/bin/python',
+        },
+        findPython: () => 'python3',
+        log: () => {},
+        error: (msg) => errors.push(msg),
+        exit: (code) => {
+          exitTrap.exit(code);
+          throw new Error(`exit ${code}`);
+        },
+        run: () => {},
+      });
+    }, /exit 1/);
+
+    assert.deepStrictEqual(exitTrap.codes, [1]);
+    assert.ok(errors.some(l => l.includes('pip not found')));
+  });
 });
