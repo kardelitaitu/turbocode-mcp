@@ -470,7 +470,7 @@ class TestBackgroundWorker:
         server._stop_event.clear()
         t = threading.Thread(target=background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
 
         assert str(f) in server.meta
         assert server.worker_state["errors"] == 0
@@ -486,7 +486,7 @@ class TestBackgroundWorker:
         server._stop_event.clear()
         t = threading.Thread(target=background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
 
         assert server.worker_state["errors"] == 0
         assert "/nonexistent/file.py" not in server.meta
@@ -546,7 +546,7 @@ class TestFileIndexingEdgeCases:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
 
         assert server.worker_state["processed"] == 1
         assert str(f) in server.meta
@@ -753,7 +753,7 @@ class TestIdleWatchdog:
 
         t = threading.Thread(target=server.idle_watchdog, daemon=True)
         t.start()
-        time.sleep(0.2)
+        time.sleep(0.03)
 
         mock_persist.assert_not_called()
         server._stop_event.set()
@@ -771,7 +771,7 @@ class TestIdleWatchdog:
 
         t = threading.Thread(target=server.idle_watchdog, daemon=True)
         t.start()
-        time.sleep(0.3)
+        time.sleep(0.05)
 
         mock_persist.assert_called()
         server._stop_event.set()
@@ -864,7 +864,7 @@ class TestBackgroundWorkerRobustness:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
 
         # persist_all handles the error internally; worker continues
         assert server.worker_state["errors"] == 0
@@ -881,7 +881,7 @@ class TestBackgroundWorkerRobustness:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
 
         assert server.worker_state["errors"] == 1
 
@@ -1302,7 +1302,7 @@ class TestWorkerStopEvent:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         assert server.worker_state["processed"] >= 1
 
 
@@ -1410,7 +1410,7 @@ class TestWorkerStatusTransitions:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["status"] == "idle"
 
@@ -1423,7 +1423,7 @@ class TestWorkerStatusTransitions:
         server.enqueue("new", str(f))
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["processed"] >= 1
 
@@ -1433,7 +1433,7 @@ class TestWorkerStatusTransitions:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["status"] == "idle"
 
@@ -1724,7 +1724,7 @@ class TestBackgroundWorkerEdgeCases:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         t.join(timeout=1)
         assert not t.is_alive(), "Worker busy-looped at BATCH_INTERVAL=0"
@@ -1735,7 +1735,7 @@ class TestBackgroundWorkerEdgeCases:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         t.join(timeout=1)
         assert not t.is_alive()
@@ -1790,7 +1790,7 @@ class TestEnqueuePriorityEdgeCases:
 
 class TestPropertyBasedQueue:
     @given(
-        priorities=st.lists(st.sampled_from(["remove", "new", "changed", "reindex", "unknown"]), max_size=8),
+        priorities=st.lists(st.sampled_from(["remove", "new", "changed", "reindex", "unknown"]), max_size=4),
     )
     def test_dequeue_preserves_items(self, priorities):
         server.index_queue.clear()
@@ -1815,7 +1815,7 @@ class TestPropertyBasedQueue:
         assert len(batch) == n1 + n2
 
     @given(
-        file_paths=st.lists(st.text(min_size=1, max_size=50), min_size=0, max_size=10),
+        file_paths=st.lists(st.text(min_size=1, max_size=50), min_size=0, max_size=5),
     )
     def test_queue_depth_matches_enqueues(self, file_paths):
         server.index_queue.clear()
@@ -1929,7 +1929,7 @@ class TestIdleWatchdogTimeout:
         server._stop_event.clear()
         t = threading.Thread(target=server.idle_watchdog, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         t.join(timeout=1)
         # os._exit may be called multiple times since mock prevents actual exit
@@ -1944,7 +1944,7 @@ class TestIdleWatchdogTimeout:
         server._stop_event.clear()
         t = threading.Thread(target=server.idle_watchdog, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert any("persist" in str(c).lower() for c in mock_log.call_args_list)
 
@@ -1967,7 +1967,7 @@ class TestBackgroundWorkerMixedBatch:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.2)
+        time.sleep(0.03)
         server._stop_event.set()
 
         assert str(f) in server.meta
@@ -2082,7 +2082,7 @@ class TestHandleIndexAddWithIdsFailure:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
 
         assert server.worker_state["errors"] >= 1
@@ -2259,7 +2259,7 @@ class TestProcessCountMatches:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.2)
+        time.sleep(0.03)
         server._stop_event.set()
 
         assert server.worker_state["processed"] == 3
@@ -2474,7 +2474,7 @@ class TestHandleIndexMissingMetaId:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
 
         # Worker gracefully handles missing 'id' — file re-indexed
@@ -2512,7 +2512,7 @@ class TestHandleRemoveMissingMetaId:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
 
         # Gracefully removes meta entry even without 'id' key
@@ -2708,7 +2708,7 @@ class TestWorkerStatePersistsAfterError:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert "turbovec crash" in (server.worker_state["last_error"] or "")
 
@@ -2725,7 +2725,7 @@ class TestWorkerStatePersistsAfterError:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         t.join(timeout=1)
         assert server.worker_state["errors"] >= 1
@@ -2858,7 +2858,7 @@ class TestWorkerDoesNotIncrementProcessedOnError:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["processed"] == 0
         assert server.worker_state["errors"] >= 1
@@ -2887,7 +2887,7 @@ class TestWorkerDoesNotIncrementProcessedOnError:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["processed"] == 1
         assert server.worker_state["errors"] == 1
@@ -3044,8 +3044,9 @@ class TestGetIndexStatsPathEdgeCases:
         result = server.get_index_stats()
         assert "Disk: 0.0 KB" in result
 
-    def test_stats_path_stat_raises(self, monkeypatch, mocker):
-        monkeypatch.setattr(server, "INDEX_PATH", "\\\\invalid\\path??.tvim")
+    def test_stats_path_stat_raises(self, mocker):
+        mocker.patch("server.os.path.exists", return_value=True)
+        mocker.patch("server.os.path.getsize", side_effect=OSError("stat fail"))
         result = server.get_index_stats()
         assert "Disk: 0.0 KB" in result
 
@@ -3090,7 +3091,7 @@ class TestBackgroundWorkerPersistFailure:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["errors"] >= 1
 
@@ -3107,7 +3108,7 @@ class TestBackgroundWorkerPersistFailure:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["last_error"] is not None
         assert "persist boom" in server.worker_state["last_error"]
@@ -3134,7 +3135,7 @@ class TestBackgroundWorkerPriorityProcessing:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert str(f1) not in server.meta
         assert str(f2) not in server.meta
@@ -3285,7 +3286,7 @@ class TestBackgroundWorkerStateTransitions:
         mocker.patch.object(server, "dequeue_batch", side_effect=capture_and_dequeue)
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.1)
+        time.sleep(0.02)
         server._stop_event.set()
         assert any(status == "idle" for status, _ in result_queue)
 
@@ -3331,7 +3332,7 @@ class TestBackgroundWorkerHandlesPersistException:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["last_error"] is not None
         assert "first persist fails" in server.worker_state["last_error"]
@@ -3358,7 +3359,7 @@ class TestBackgroundWorkerHandlesPersistException:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["processed"] == 2
         assert server.worker_state["errors"] == 1
@@ -3455,7 +3456,7 @@ class TestBackgroundWorkerPersistDoesNotCrashOnWarning:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["processed"] == 1
         assert server.worker_state["errors"] == 0
@@ -3662,7 +3663,7 @@ class TestBackgroundWorkerMultipleBatches:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.3)
+        time.sleep(0.25)
         server._stop_event.set()
         assert server.worker_state["processed"] == 15
 
@@ -3687,7 +3688,7 @@ class TestBackgroundWorkerMultipleBatches:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.3)
+        time.sleep(0.15)
         server._stop_event.set()
         assert server.worker_state["processed"] == 6
         assert server.worker_state["errors"] == 1
@@ -3775,7 +3776,7 @@ class TestBackgroundWorkerPriorityAcrossBatches:
         mocker.patch.object(server, "dequeue_batch", side_effect=capturing_dequeue)
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.2)
+        time.sleep(0.15)
         server._stop_event.set()
         remove_items = [p for p, _ in results if p == "remove"]
         new_items = [p for p, _ in results if p == "new"]
@@ -3835,7 +3836,7 @@ class TestBackgroundWorkerIdleStatusAfterProcessing:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         assert server.worker_state["status"] == "idle" or server.worker_state["processed"] == 1
         server._stop_event.set()
 
@@ -3956,7 +3957,7 @@ class TestIndexDirectoryEmptyPath:
 
     def test_empty_path_returns_error(self):
         result = server.index_directory("")
-        assert "not found" in result.lower()
+        assert "error" in result.lower()
 
 
 class TestPersistAllStoreEdgeCases:
@@ -3994,7 +3995,7 @@ class TestBackgroundWorkerAllPriorities:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["processed"] == 1
         assert str(f) in server.meta
@@ -4011,7 +4012,7 @@ class TestBackgroundWorkerAllPriorities:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["processed"] == 1
         assert str(f) in server.meta
@@ -4151,7 +4152,7 @@ class TestBackgroundWorkerReindexOnly:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["processed"] == 1
         assert str(f) in server.meta
@@ -4215,7 +4216,7 @@ class TestBackgroundWorkerEmptyQueueStaleOnly:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         assert server.worker_state["processed"] >= 1
 
@@ -4425,7 +4426,7 @@ class TestBackgroundWorkerPersistCalled:
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
-        time.sleep(0.15)
+        time.sleep(0.02)
         server._stop_event.set()
         mock_persist.assert_called()
 

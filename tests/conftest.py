@@ -9,6 +9,11 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+# Pre-import heavy dependencies once during collection so their import cost
+# is not attributed to individual test fixtures.
+import sentence_transformers  # noqa: E402
+from turbovec import IdMapIndex  # noqa: E402
+
 
 @pytest.fixture(autouse=True)
 def clean_globals():
