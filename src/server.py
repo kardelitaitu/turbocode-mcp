@@ -59,9 +59,18 @@ worker_state = {
 # ═══════════════════════════════════════════════════════════════
 
 
+DEBUG_MODE = False
+
+
 def log(msg: str) -> None:
     """Log a message to stderr. stdout is reserved for MCP protocol."""
     print(f"[TurboCode MCP] {msg}", file=sys.stderr, flush=True)
+
+
+def debug(msg: str) -> None:
+    """Log a debug message to stderr (only when --debug is enabled)."""
+    if DEBUG_MODE:
+        print(f"[TurboCode MCP] [DEBUG] {msg}", file=sys.stderr, flush=True)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -343,6 +352,7 @@ def background_worker() -> None:
         # Process each file — I/O and CPU outside lock
         for priority, file_path in batch:
             try:
+                debug(f"Processing [{priority}] {file_path}")
                 if priority == "remove":
                     handle_remove(file_path)
                 else:
@@ -353,6 +363,7 @@ def background_worker() -> None:
                 worker_state["last_error"] = str(e)
 
         # Persist after each batch
+        debug(f"Batch complete. Persisting...")
         persist_all()
 
         time.sleep(BATCH_INTERVAL)
@@ -573,7 +584,11 @@ def index_stats() -> str:
 
 
 def main() -> None:
-    global meta, store, current_id
+    global meta, store, current_id, DEBUG_MODE
+
+    # Parse CLI flags
+    if "--debug" in sys.argv:
+        DEBUG_MODE = True
 
     os.makedirs(TURBOCODE_DIR, exist_ok=True)
 
@@ -583,6 +598,10 @@ def main() -> None:
     # Start background threads
     threading.Thread(target=background_worker, daemon=True).start()
     threading.Thread(target=idle_watchdog, daemon=True).start()
+
+    debug(f"TURBOCODE_DIR={TURBOCODE_DIR}")
+    debug(f"INDEX_PATH={INDEX_PATH}")
+    debug(f"meta count={len(meta)}, store count={len(store)}")
 
     log(f"Ready. {len(meta)} files tracked. "
         f"Model/index loaded on demand. "

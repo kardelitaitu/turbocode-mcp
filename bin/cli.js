@@ -14,6 +14,7 @@ const fs = require('fs');
 
 const ROOT_DIR = path.join(__dirname, '..');
 const IS_WIN = process.platform === 'win32';
+const PACKAGE_JSON = path.join(ROOT_DIR, 'package.json');
 
 const PYTHON_EXECUTABLE = IS_WIN
     ? path.join(ROOT_DIR, '.venv', 'Scripts', 'python.exe')
@@ -22,12 +23,72 @@ const PYTHON_EXECUTABLE = IS_WIN
 const SERVER_SCRIPT = path.join(ROOT_DIR, 'src', 'server.py');
 
 function log(msg) {
-    // Server communicates over stdout via MCP protocol.
-    // All CLI wrapper messages go to stderr.
     console.error(`[turbocode-mcp] ${msg}`);
 }
 
+function getVersion() {
+    try {
+        return JSON.parse(fs.readFileSync(PACKAGE_JSON, 'utf-8')).version || 'unknown';
+    } catch {
+        return 'unknown';
+    }
+}
+
+function printHelp() {
+    const version = getVersion();
+    console.log(`
+TurboCode MCP v${version}
+
+A fully local codebase vector search MCP server powered by Turbovec.
+Zero cloud dependencies — everything runs on your machine.
+
+USAGE:
+    turbocode-mcp [OPTIONS]
+
+OPTIONS:
+    --help          Print this help message and exit
+    --version       Print the version number and exit
+    --debug         Enable verbose logging to stderr
+
+EXAMPLES:
+    turbocode-mcp
+        Start the MCP server (connects via stdio to your MCP client).
+
+    turbocode-mcp --debug
+        Start the server with verbose debug logging.
+
+CONFIGURATION:
+    Add to Claude Desktop (claude_desktop_config.json):
+    {
+        "mcpServers": {
+            "turbovec-search": {
+                "command": "turbocode-mcp"
+            }
+        }
+    }
+
+DOCUMENTATION:
+    https://github.com/kardelitaitu/turbocode-mcp
+`.trim());
+}
+
 function main() {
+    // Parse CLI flags
+    const args = process.argv.slice(2);
+    const flags = new Set(args);
+
+    if (flags.has('--help') || flags.has('-h')) {
+        printHelp();
+        process.exit(0);
+    }
+
+    if (flags.has('--version') || flags.has('-v')) {
+        console.log(getVersion());
+        process.exit(0);
+    }
+
+    const debug = flags.has('--debug');
+
     // Check Python environment
     if (!fs.existsSync(PYTHON_EXECUTABLE)) {
         log('Python environment not found.');
@@ -43,8 +104,15 @@ function main() {
         process.exit(1);
     }
 
+    if (debug) {
+        log(`Debug mode enabled`);
+        log(`Python: ${PYTHON_EXECUTABLE}`);
+        log(`Server: ${SERVER_SCRIPT}`);
+    }
+
     // Spawn the Python MCP server with inherited stdio
-    const mcpProcess = spawn(PYTHON_EXECUTABLE, [SERVER_SCRIPT], {
+    const serverArgs = debug ? [SERVER_SCRIPT, '--debug'] : [SERVER_SCRIPT];
+    const mcpProcess = spawn(PYTHON_EXECUTABLE, serverArgs, {
         stdio: 'inherit',
         env: { ...process.env },
     });
