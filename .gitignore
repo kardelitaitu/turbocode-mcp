@@ -27,3 +27,6 @@ nul
 *.swp
 *.swo
 *~
+
+# Agent instructions
+AGENTS.md
