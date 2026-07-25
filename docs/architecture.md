@@ -417,8 +417,8 @@ def recover_from_crash():
             index_count = -1  # Corrupt
     
     if meta_count != store_count:
-        print(f"[WARN] Inconsistency: meta={meta_count} vs store={store_count}. "
-              "Rebuilding from store.")
+        log(f"Inconsistency: meta={meta_count} vs store={store_count}. "
+            "Rebuilding from store.")
         # Rebuild meta from store (reverse mapping)
         new_meta = {}
         for id_val, doc in store.items():
@@ -446,7 +446,7 @@ def index_file(file_path: str):
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
     except Exception as e:
-        print(f"[WARN] Cannot read {file_path}: {e}")
+        log(f"Cannot read {file_path}: {e}")
         return
     
     chunk = content[:2000].strip()

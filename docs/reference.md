@@ -197,7 +197,7 @@ def background_worker():
                 else:
                     handle_index(file_path)
             except Exception as e:
-                print(f"[ERR] Failed to index {file_path}: {e}")
+                log(f"Failed to index {file_path}: {e}")
         
         # 4. Persist atomically
         persist_all()
@@ -422,8 +422,8 @@ def load_and_verify():
         return  # Clean state
     
     if meta_count != store_count:
-        print(f"[WARN] Inconsistency detected: meta={meta_count} files vs "
-              f"store={store_count} vectors. Rebuilding meta from store.")
+        log(f"Inconsistency detected: meta={meta_count} files vs "
+            f"store={store_count} vectors. Rebuilding meta from store.")
         
         # Rebuild meta from store (store is the source of truth)
         new_meta = {}

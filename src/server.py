@@ -17,6 +17,7 @@ import threading
 from collections import deque
 
 import numpy as np
+import pathspec
 from fastmcp import FastMCP
 from turbovec import IdMapIndex
 
@@ -568,6 +569,41 @@ def idle_watchdog() -> None:
 mcp = FastMCP("TurboCode MCP")
 
 
+# ── Helpers ──
+
+
+def _load_gitignore_specs(root: str) -> list[tuple[str, pathspec.PathSpec]]:
+    """Load .gitignore files from root upward. Returns (prefix, spec) pairs."""
+    specs: list[tuple[str, pathspec.PathSpec]] = []
+    current = os.path.abspath(root)
+    while True:
+        gi = os.path.join(current, ".gitignore")
+        if os.path.isfile(gi):
+            try:
+                with open(gi, "r") as f:
+                    spec = pathspec.PathSpec.from_lines("gitwildmatch", f)
+                specs.append((current, spec))
+            except Exception:
+                pass
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return specs
+
+
+def _is_gitignored(filepath: str, specs: list[tuple[str, pathspec.PathSpec]]) -> bool:
+    """Check if a file path matches any loaded .gitignore spec."""
+    for prefix, spec in specs:
+        try:
+            rel = os.path.relpath(filepath, prefix).replace(os.sep, "/")
+            if spec.match_file(rel):
+                return True
+        except (ValueError, OSError):
+            pass
+    return False
+
+
 # ── Tools ──
 
 
@@ -595,6 +631,9 @@ def index_directory(directory_path: str) -> str:
     with index_lock:
         meta_snapshot = dict(meta)
 
+    # Load .gitignore rules from directory upward
+    gitignore_specs = _load_gitignore_specs(directory_path)
+
     # Walk filesystem
     try:
         for root, _, files in os.walk(directory_path, followlinks=False):
@@ -602,6 +641,9 @@ def index_directory(directory_path: str) -> str:
                 if not f.lower().endswith(SUPPORTED_EXT):
                     continue
                 fp = os.path.normpath(os.path.join(root, f))
+                if _is_gitignored(fp, gitignore_specs):
+                    debug(f"Skipping gitignored: {fp}")
+                    continue
 
                 tracked_info = meta_snapshot.get(fp)
                 tracked = tracked_info is not None
