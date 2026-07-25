@@ -131,6 +131,57 @@ describe('CLI Wrapper', () => {
     );
   });
 
+  it('getVersion returns version from package.json', () => {
+    const cli = require('../bin/cli.js');
+    const version = cli.getVersion();
+    assert.match(version, /^\d+\.\d+\.\d+$/);
+  });
+
+  it('cli.log prefixes output with [turbocode-mcp]', () => {
+    const cli = require('../bin/cli.js');
+    const logs = [];
+    const originalError = console.error;
+    console.error = (msg) => logs.push(msg);
+    try {
+      cli.log('test message');
+      assert.ok(logs[0].includes('[turbocode-mcp]'));
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  it('cli module has expected exports', () => {
+    const cli = require('../bin/cli.js');
+    assert.ok(typeof cli.main === 'function');
+    assert.ok(typeof cli.getVersion === 'function');
+    assert.ok(typeof cli.printHelp === 'function');
+    assert.ok(typeof cli.log === 'function');
+    assert.ok(typeof cli.ROOT_DIR === 'string');
+    assert.ok(typeof cli.PYTHON_EXECUTABLE === 'string');
+    assert.ok(typeof cli.SERVER_SCRIPT === 'string');
+  });
+
+  it('cli.main spawn error handler calls exit with 1', () => {
+    const cli = require('../bin/cli.js');
+    const exitCodes = [];
+    const { EventEmitter } = require('events');
+    const child = new EventEmitter();
+
+    cli.main({
+      argv: [],
+      fs: { existsSync: () => true },
+      paths: {
+        pythonExecutable: '/fake/python',
+        serverScript: '/fake/server.py',
+      },
+      spawn: () => child,
+      exit: (code) => { exitCodes.push(code); },
+    });
+
+    child.emit('error', { message: 'spawn failed' });
+    assert.deepStrictEqual(exitCodes, [1]);
+  });
+
   it('--help overrides --debug when both provided', () => {
     const r = run(['--debug', '--help']);
     assert.strictEqual(r.status, 0);

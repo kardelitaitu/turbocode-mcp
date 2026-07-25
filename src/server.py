@@ -351,7 +351,7 @@ def handle_remove(file_path: str) -> None:
             return
         try:
             index.remove(file_id)
-        except Exception:
+        except BaseException:
             pass
         store.pop(file_id, None)
         del meta[file_path]
@@ -595,7 +595,10 @@ def index_directory(directory_path: str) -> str:
                 if not tracked:
                     new_files.append(fp)
                 else:
-                    file_mtime = os.path.getmtime(fp)
+                    try:
+                        file_mtime = os.path.getmtime(fp)
+                    except OSError:
+                        continue
                     if tracked_mtime != file_mtime:
                         changed_files.append(fp)
     except PermissionError:
@@ -671,6 +674,8 @@ def search_codebase(query: str, k: int = 3) -> str:
         if doc and isinstance(doc, dict):
             file_path = doc.get("path", "unknown")
             content = doc.get("content", "")
+            if not isinstance(content, str):
+                content = str(content) if content is not None else ""
             display = content[:500]
             suffix = "..." if len(content) > 500 else ""
             results.append(

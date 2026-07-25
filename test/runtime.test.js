@@ -57,6 +57,86 @@ describe('Runtime behavior', () => {
     assert.deepStrictEqual(execCalls, ['python --version', 'python3 --version', 'py --version']);
   });
 
+  it('setup.findPython exits when no candidate returns a parseable version', () => {
+    let exitCode = null;
+
+    assert.throws(() => {
+      setup.findPython({
+        candidates: ['python', 'python3'],
+        execSync: () => 'node v20.0.0',  // not a Python version string
+        exit: (code) => {
+          exitCode = code;
+          throw new Error(`exit ${code}`);
+        },
+      });
+    }, /exit 1/);
+
+    assert.strictEqual(exitCode, 1);
+  });
+
+  it('setup.findPython exits when all candidates throw', () => {
+    let exitCode = null;
+
+    assert.throws(() => {
+      setup.findPython({
+        candidates: ['python', 'python3', 'py'],
+        execSync: () => { throw new Error('not found'); },
+        exit: (code) => {
+          exitCode = code;
+          throw new Error(`exit ${code}`);
+        },
+      });
+    }, /exit 1/);
+
+    assert.strictEqual(exitCode, 1);
+  });
+
+  it('setup.run calls exit on execSync failure', () => {
+    let exitCode = null;
+    const runFn = setup.run;
+
+    assert.throws(() => {
+      runFn('some-command-that-fails', {}, {
+        execSync: () => { throw new Error('command failed'); },
+        exit: (code) => {
+          exitCode = code;
+          throw new Error(`exit ${code}`);
+        },
+      });
+    }, /exit 1/);
+
+    assert.strictEqual(exitCode, 1);
+  });
+
+  it('setup.main throws when pip install fails', () => {
+    const project = createTempProject();
+    fs.rmSync(project.venvDir, { recursive: true, force: true });
+
+    assert.throws(() => {
+      setup.main({
+        fs,
+        isWin: true,
+        paths: {
+          venvDir: project.venvDir,
+          requirements: project.requirements,
+        },
+        findPython: () => 'python3',
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+        run: (cmd) => {
+          if (cmd.includes('-m venv')) {
+            fs.mkdirSync(project.binDir, { recursive: true });
+            fs.writeFileSync(project.pipPath, '', 'utf-8');
+            fs.writeFileSync(project.pythonBin, '', 'utf-8');
+          } else {
+            throw new Error('pip install failed');
+          }
+        },
+      });
+    }, /pip install failed/);
+  });
+
   it('setup.findPython exits when it finds a version that is too old', () => {
     let exitCode = null;
 
