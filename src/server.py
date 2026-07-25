@@ -588,6 +588,17 @@ def main() -> None:
         f"Model/index loaded on demand. "
         f"Idle timeout: {IDLE_TIMEOUT // 60}m.")
 
+    # Handle graceful shutdown signals
+    import signal as sig_module
+
+    def handle_signal(signum, frame):
+        log(f"Received signal {signum}. Persisting and shutting down...")
+        persist_all()
+        os._exit(0)
+
+    sig_module.signal(sig_module.SIGINT, handle_signal)
+    sig_module.signal(sig_module.SIGTERM, handle_signal)
+
     mcp.run()
 
 
