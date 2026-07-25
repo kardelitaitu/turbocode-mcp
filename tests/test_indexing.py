@@ -1,20 +1,18 @@
 """
 Auto-generated test file for indexing.
 """
-import builtins
+
+import contextlib
 import json
 import os
-import time
-import threading
 import signal as sig_module
-from collections import deque
+import threading
+import time
 
 import numpy as np
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
 
 import server
-
 
 
 class TestStaleFileDetection:
@@ -43,10 +41,7 @@ class TestStaleFileDetection:
 
     def test_respects_max_files_limit(self):
         now = time.time()
-        server.meta = {
-            f"/f{i}.py": {"id": i, "last_indexed": now - 14 * 86400}
-            for i in range(20)
-        }
+        server.meta = {f"/f{i}.py": {"id": i, "last_indexed": now - 14 * 86400} for i in range(20)}
         stale = server.find_stale_files(max_age_days=7, max_files=5)
         assert len(stale) == 5
 
@@ -59,7 +54,6 @@ class TestStaleFileDetection:
         stale = server.find_stale_files(max_age_days=7, max_files=10)
         assert "/fresh.py" not in stale
         assert "/no_index.py" in stale
-
 
 
 class TestFileIndexing:
@@ -118,7 +112,6 @@ class TestFileIndexing:
         assert "/proj/file1.py" not in server.meta
 
 
-
 class TestToolIndexDirectory:
     def test_directory_not_found(self):
         result = server.index_directory("/nonexistent/dir")
@@ -168,7 +161,6 @@ class TestToolIndexDirectory:
         assert "remove" in result.lower()
 
 
-
 class TestToolGetIndexStats:
     def test_stats_no_load(self):
         result = server.get_index_stats()
@@ -184,7 +176,6 @@ class TestToolGetIndexStats:
     def test_stats_model_loaded(self, populated_state, mock_model, mock_index):
         result = server.get_index_stats()
         assert "Model loaded: True" in result
-
 
 
 class TestHandleIndexNoneGuards:
@@ -210,7 +201,6 @@ class TestHandleIndexNoneGuards:
         server.index = None
         server.handle_remove("/proj/file1.py")
         # No crash is the assertion
-
 
 
 class TestFileIndexingEdgeCases:
@@ -253,7 +243,6 @@ class TestFileIndexingEdgeCases:
         assert "/proj/file1.py" not in server.meta
 
 
-
 class TestIndexDirectoryEdgeCases:
     def test_empty_directory(self, tmp_path, mock_model, mock_index):
         d = tmp_path / "empty"
@@ -288,10 +277,8 @@ class TestIndexDirectoryEdgeCases:
         d.mkdir()
         (d / "real.py").write_text("x = 1")
         link = d / "linked.py"
-        try:
+        with contextlib.suppress(OSError, NotImplementedError):
             os.symlink(str(d / "real.py"), str(link))
-        except (OSError, NotImplementedError):
-            pass
 
         result = server.index_directory(str(d))
         assert "up to date" in result.lower() or "queued" in result.lower()
@@ -319,7 +306,6 @@ class TestIndexDirectoryEdgeCases:
         assert "Permission denied" in result
 
 
-
 class TestEnsureIndexEdgeCases:
     def test_ensure_index_tvim_missing_creates_empty(self, mocker):
         mocker.patch("os.path.exists", return_value=False)
@@ -332,7 +318,7 @@ class TestEnsureIndexEdgeCases:
         with open(server.INDEX_PATH, "wb") as f:
             f.write(b"garbage")
 
-        mock_load = mocker.patch("server.IdMapIndex.load", side_effect=Exception("corrupt"))
+        mocker.patch("server.IdMapIndex.load", side_effect=Exception("corrupt"))
         server.index = None
         server.ensure_index()
 
@@ -354,7 +340,6 @@ class TestEnsureIndexEdgeCases:
         server.ensure_index()
         assert server.index is not None
         mock_remove.assert_called_once_with(server.INDEX_PATH)
-
 
 
 class TestIndexDirectoryAdditionalEdgeCases:
@@ -417,7 +402,6 @@ class TestIndexDirectoryAdditionalEdgeCases:
         assert server.queue_depth() == 10
 
 
-
 class TestGetIndexStatsEdgeCases:
     def test_zero_size_index_file(self, tmp_path):
         open(server.INDEX_PATH, "w").close()
@@ -429,7 +413,6 @@ class TestGetIndexStatsEdgeCases:
         result = server.get_index_stats()
         assert "Vectors: 2" in result
         assert "Files tracked: 2" in result
-
 
 
 class TestHandleIndexGetmtimeFailure:
@@ -452,7 +435,6 @@ class TestHandleIndexGetmtimeFailure:
         assert str(f) not in server.meta
 
 
-
 class TestHandleIndexIOErrors:
     def test_handle_index_with_directory_path(self, tmp_path, mock_model, mock_index):
         server.current_id = 1
@@ -472,7 +454,7 @@ class TestHandleIndexIOErrors:
     def test_handle_index_with_non_ascii_content(self, tmp_path, mock_model, mock_index):
         server.current_id = 1
         f = tmp_path / "unicode.py"
-        f.write_text("def café():\n    return 'über cool'\n", encoding='utf-8')
+        f.write_text("def café():\n    return 'über cool'\n", encoding="utf-8")
         server.handle_index(str(f))
         assert len(server.store) == 1
         stored = list(server.store.values())[0]["content"]
@@ -509,7 +491,6 @@ class TestHandleIndexIOErrors:
         assert server.meta[str(f)]["id"] != initial_id
 
 
-
 class TestGetIndexStatsPermissionError:
     def test_tool_handles_getsize_permission_error(self, mocker, populated_state):
         mocker.patch("os.path.exists", return_value=True)
@@ -523,7 +504,6 @@ class TestGetIndexStatsPermissionError:
         result = server.index_stats()
         data = json.loads(result)
         assert data["disk_size_kb"] == 0.0
-
 
 
 class TestHandleRemoveEdgeCases:
@@ -541,7 +521,6 @@ class TestHandleRemoveEdgeCases:
         # no crash
 
 
-
 class TestHandleIndexContentEdgeCases:
     def test_handle_index_whitespace_only(self, tmp_path, mock_model, mock_index):
         server.current_id = 1
@@ -557,7 +536,6 @@ class TestHandleIndexContentEdgeCases:
         mocker.patch("builtins.open", side_effect=[FileNotFoundError("file vanished")])
         server.handle_index(str(f))
         assert len(server.store) == 0
-
 
 
 class TestEnsureIndexThreadSafety:
@@ -613,7 +591,6 @@ class TestEnsureIndexThreadSafety:
         assert server.index is index_instance
 
 
-
 class TestHandleIndexTruncation:
     def test_content_capped_at_2000_chars(self, tmp_path, mock_model, mock_index):
         server.current_id = 1
@@ -655,13 +632,13 @@ class TestHandleIndexTruncation:
         assert stored == "x" * 2000
 
 
-
 class TestConcurrentIndexAndSearch:
     def test_concurrent_index_and_search(self, tmp_path, mock_model, mock_index, mocker):
         mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
         mock_index.write.side_effect = lambda p: open(p, "w").close()
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
 
         d = tmp_path / "concurrent"
@@ -688,7 +665,6 @@ class TestConcurrentIndexAndSearch:
         assert results[1] is not None
 
 
-
 class TestIndexStatsNonSerializable:
     def test_index_stats_with_non_serializable_last_error(self, mocker):
         mocker.patch("os.path.exists", return_value=True)
@@ -698,7 +674,6 @@ class TestIndexStatsNonSerializable:
         data = json.loads(result)
         assert "last_error" in data
         assert data["last_error"] is not None
-
 
 
 class TestHandleIndexReindexStatFailure:
@@ -731,7 +706,9 @@ class TestHandleIndexReindexStatFailure:
         assert old_id in server.store
         assert server.store[old_id]["content"] == "original content"
 
-    def test_reindex_stat_failure_does_not_remove_vector(self, tmp_path, mock_model, mock_index, populated_state, mocker):
+    def test_reindex_stat_failure_does_not_remove_vector(
+        self, tmp_path, mock_model, mock_index, populated_state, mocker
+    ):
         f = tmp_path / "existing.py"
         f.write_text("original content")
         server.current_id = 1
@@ -742,7 +719,6 @@ class TestHandleIndexReindexStatFailure:
 
         # add_with_ids was called exactly once (first index, not during failed reindex)
         assert mock_index.add_with_ids.call_count == 1
-
 
 
 class TestHandleIndexAddWithIdsFailure:
@@ -805,7 +781,6 @@ class TestHandleIndexAddWithIdsFailure:
         assert "turbovec oom" in (server.worker_state["last_error"] or "")
 
 
-
 class TestHandleIndexRemoveFailure:
     """Verify behavior when index.remove fails during reindex."""
 
@@ -824,7 +799,6 @@ class TestHandleIndexRemoveFailure:
         assert str(f) in server.meta
         assert server.meta[str(f)]["id"] != old_id
         assert server.meta[str(f)]["id"] == 2
-
 
 
 class TestFindStaleFilesEdgeCases:
@@ -856,18 +830,16 @@ class TestFindStaleFilesEdgeCases:
         assert stale == []
 
 
-
 class TestEnsureIndexLoadCorrupt:
     def test_corrupt_tvim_removed_and_recreated(self, mocker):
         with open(server.INDEX_PATH, "wb") as f:
             f.write(b"corrupt data")
-        mock_load = mocker.patch("server.IdMapIndex.load", side_effect=Exception("corrupt"))
+        mocker.patch("server.IdMapIndex.load", side_effect=Exception("corrupt"))
         server.index = None
         server.ensure_index()
 
         assert not os.path.exists(server.INDEX_PATH)
         assert server.index is not None
-
 
 
 class TestIndexStatsResourceConsistency:
@@ -887,7 +859,6 @@ class TestIndexStatsResourceConsistency:
         assert stats_json["files_tracked"] == 3
 
 
-
 class TestHandleRemoveIndexNoneStillInMeta:
     def test_remove_when_index_none_meta_unchanged(self, populated_state):
         server.index = None
@@ -898,7 +869,6 @@ class TestHandleRemoveIndexNoneStillInMeta:
         server.handle_remove("/not/in/meta.py")
         assert server.meta == {}
         assert server.store == {}
-
 
 
 class TestIndexDirectoryOSError:
@@ -927,7 +897,6 @@ class TestIndexDirectoryOSError:
         result = server.index_directory(str(d))
         assert "Error" in result
         assert "Cannot read directory" in result
-
 
 
 class TestHandleIndexMissingMetaId:
@@ -976,7 +945,6 @@ class TestHandleIndexMissingMetaId:
         assert True
 
 
-
 class TestHandleRemoveMissingMetaId:
     """handle_remove survives meta entries missing 'id' key."""
 
@@ -998,29 +966,21 @@ class TestHandleRemoveMissingMetaId:
         assert "/proj/file1.py" not in server.meta
 
 
-
 class TestFindStaleFilesLargeMeta:
     """find_stale_files performs well with large meta."""
 
     def test_find_stale_scalable(self):
         now = time.time()
-        server.meta = {
-            f"/f{i}.py": {"id": i, "last_indexed": 0 if i < 50 else now}
-            for i in range(100)
-        }
+        server.meta = {f"/f{i}.py": {"id": i, "last_indexed": 0 if i < 50 else now} for i in range(100)}
         stale = server.find_stale_files(max_age_days=1, max_files=10)
         assert len(stale) == 10
         assert all("f" in p for p in stale)
 
     def test_find_stale_all_stale_limited(self):
         now = time.time()
-        server.meta = {
-            f"/f{i}.py": {"id": i, "last_indexed": now - 86400 * 30}
-            for i in range(25)
-        }
+        server.meta = {f"/f{i}.py": {"id": i, "last_indexed": now - 86400 * 30} for i in range(25)}
         stale = server.find_stale_files(max_age_days=7, max_files=5)
         assert len(stale) == 5
-
 
 
 class TestEnsureIndexWithMissingDirectory:
@@ -1037,7 +997,6 @@ class TestEnsureIndexWithMissingDirectory:
         server.index = object()
         server.ensure_index()
         assert server.index is not None
-
 
 
 class TestIndexDirectoryWithSymlinks:
@@ -1058,7 +1017,6 @@ class TestIndexDirectoryWithSymlinks:
         assert "Queued" in result or "up to date" in result
 
 
-
 class TestHandleIndexRollbackScenarios:
     """Edge cases in handle_index rollback when add_with_ids fails."""
 
@@ -1069,10 +1027,8 @@ class TestHandleIndexRollbackScenarios:
         mock_index.add_with_ids.side_effect = RuntimeError("add fails")
         # Make index.remove raise too (simulate rollback failure)
         mock_index.remove.side_effect = RuntimeError("remove fails in rollback")
-        try:
+        with contextlib.suppress(RuntimeError):
             server.handle_index(str(f))
-        except RuntimeError:
-            pass
         # current_id is incremented even on failure (harmless gap)
         assert server.current_id == 11
         # meta and store should not contain the file
@@ -1087,10 +1043,8 @@ class TestHandleIndexRollbackScenarios:
         server.meta[str(f)] = {"id": 3, "mtime": 100.0, "size": 10, "last_indexed": 200.0}
         server.store[3] = {"path": str(f), "content": "old"}
         mock_index.add_with_ids.side_effect = RuntimeError("add fails")
-        try:
+        with contextlib.suppress(RuntimeError):
             server.handle_index(str(f))
-        except RuntimeError:
-            pass
         # Old entry should be preserved (data loss prevention)
         assert str(f) in server.meta
         assert 3 in server.store
@@ -1101,14 +1055,11 @@ class TestHandleIndexRollbackScenarios:
         f = tmp_path / "f.py"
         f.write_text("x = 1")
         mock_index.add_with_ids.side_effect = RuntimeError("add fails")
-        try:
+        with contextlib.suppress(RuntimeError):
             server.handle_index(str(f))
-        except RuntimeError:
-            pass
         # file_id=7 was never in store, so store.pop(file_id, None) is safe
         assert 7 not in server.store
         assert str(f) not in server.meta
-
 
 
 class TestHandleIndexReindexAddFailurePreservesOld:
@@ -1145,7 +1096,6 @@ class TestHandleIndexReindexAddFailurePreservesOld:
         assert server.store[old_id]["content"] == "old content"
 
 
-
 class TestHandleIndexPathTypeEdgeCases:
     """Path type edge cases for handle_index."""
 
@@ -1177,7 +1127,6 @@ class TestHandleIndexPathTypeEdgeCases:
         assert "print" in server.store[1]["content"]
 
 
-
 class TestEnsureIndexPathEdgeCases:
     """INDEX_PATH being a directory or special file."""
 
@@ -1205,7 +1154,6 @@ class TestEnsureIndexPathEdgeCases:
         assert server.index is not None
 
 
-
 class TestGetIndexStatsPathEdgeCases:
     """get_index_stats with unusual INDEX_PATH states."""
 
@@ -1219,7 +1167,6 @@ class TestGetIndexStatsPathEdgeCases:
         mocker.patch("server.os.path.getsize", side_effect=OSError("stat fail"))
         result = server.get_index_stats()
         assert "Disk: 0.0 KB" in result
-
 
 
 class TestHandleIndexDuplicateFile:
@@ -1262,7 +1209,6 @@ class TestHandleIndexDuplicateFile:
         assert server.current_id == 102
 
 
-
 class TestHandleIndexMultilineTruncation:
     """Content with many newlines is truncated correctly."""
 
@@ -1279,7 +1225,6 @@ class TestHandleIndexMultilineTruncation:
         stored = server.store[1]["content"]
         assert len(stored) <= 2000
         assert stored.startswith("line 0")
-
 
 
 class TestHandleIndexIOErrorsAdvanced:
@@ -1301,7 +1246,6 @@ class TestHandleIndexIOErrorsAdvanced:
         assert mock_index.add_with_ids.call_count == 0
 
 
-
 class TestIndexDirectoryFileInput:
     """index_directory rejects file paths."""
 
@@ -1310,7 +1254,6 @@ class TestIndexDirectoryFileInput:
         f.write_text("x")
         result = server.index_directory(str(f))
         assert "not a directory" in result
-
 
 
 class TestHandleIndexEncodeEdgeCase:
@@ -1341,7 +1284,6 @@ class TestHandleIndexEncodeEdgeCase:
         assert str(f) in server.meta
 
 
-
 class TestGetIndexStatsWorkerState:
     """get_index_stats reflects worker_state."""
 
@@ -1353,14 +1295,12 @@ class TestGetIndexStatsWorkerState:
         assert "7 errors" in result
 
 
-
 class TestHandleIndexNonExistentPath:
     """handle_index silently skips non-existent paths."""
 
     def test_nonexistent_path_skipped(self, mock_model, mock_index):
         server.handle_index("/nonexistent/file.py")
         assert mock_index.add_with_ids.call_count == 0
-
 
 
 class TestIndexStatsResourceFields:
@@ -1374,7 +1314,6 @@ class TestIndexStatsResourceFields:
         assert "model_loaded" in stats
         assert "model" in stats
         assert stats["model"] == "BAAI/bge-small-en-v1.5"
-
 
 
 class TestSignalHandlerNoDeadlock:
@@ -1391,14 +1330,14 @@ class TestSignalHandlerNoDeadlock:
         mocker.patch("threading.Thread")
         mocker.patch("server.mcp.run")
         registered = {}
+
         def capture(signum, handler):
             registered[signum] = handler
+
         mocker.patch("server.sig_module.signal", side_effect=capture)
         mocker.patch("server.mcp.run", side_effect=Exception("stop"))
-        try:
+        with contextlib.suppress(Exception):
             server.main()
-        except Exception:
-            pass
         handler = registered.get(sig_module.SIGINT)
         assert handler is not None
         handler(sig_module.SIGINT, None)
@@ -1419,14 +1358,14 @@ class TestSignalHandlerNoDeadlock:
             mocker.patch("threading.Thread")
             mocker.patch("server.mcp.run")
             registered = {}
+
             def capture(signum, handler):
                 registered[signum] = handler
+
             mocker.patch("server.sig_module.signal", side_effect=capture)
             mocker.patch("server.mcp.run", side_effect=Exception("stop"))
-            try:
+            with contextlib.suppress(Exception):
                 server.main()
-            except Exception:
-                pass
             handler = registered.get(sig_module.SIGINT)
             assert handler is not None
             handler(sig_module.SIGINT, None)
@@ -1434,7 +1373,6 @@ class TestSignalHandlerNoDeadlock:
             mock_exit.assert_called_once_with(0)
         finally:
             server.index_lock.release()
-
 
 
 class TestHandleRemoveNonDictMeta:
@@ -1451,7 +1389,6 @@ class TestHandleRemoveNonDictMeta:
         assert "/null.py" not in server.meta
 
 
-
 class TestHandleIndexEncodeReturnsEmpty:
     """handle_index tolerates model.encode returning empty list."""
 
@@ -1464,14 +1401,12 @@ class TestHandleIndexEncodeReturnsEmpty:
         assert len(server.store) == 0
 
 
-
 class TestIndexDirectoryEmptyPath:
     """index_directory handles empty path."""
 
     def test_empty_path_returns_error(self):
         result = server.index_directory("")
         assert "error" in result.lower()
-
 
 
 class TestHandleIndexEncodeWrongShape:
@@ -1486,7 +1421,6 @@ class TestHandleIndexEncodeWrongShape:
         assert len(server.store) == 1
 
 
-
 class TestIndexStatsDirectoriesField:
     """turbocode://stats shows directories list."""
 
@@ -1498,7 +1432,6 @@ class TestIndexStatsDirectoriesField:
         assert any("/proj" in d for d in data["directories"])
 
 
-
 class TestHandleRemoveMissingStoreEntry:
     """handle_remove works when store entry already removed."""
 
@@ -1507,7 +1440,6 @@ class TestHandleRemoveMissingStoreEntry:
         assert 1 not in server.store
         server.handle_remove("/gone.py")
         assert "/gone.py" not in server.meta
-
 
 
 class TestEnsureIndexLoadErrorAndRemoveFails:
@@ -1522,7 +1454,6 @@ class TestEnsureIndexLoadErrorAndRemoveFails:
         server.ensure_index()
         assert server.index is not None
         mock_remove.assert_called_once_with(server.INDEX_PATH)
-
 
 
 class TestHandleIndexContentMixedWhitespace:
@@ -1541,7 +1472,6 @@ class TestHandleIndexContentMixedWhitespace:
         assert "x = 1" in server.store[1]["content"]
 
 
-
 class TestFindStaleMaxFilesGuard:
     """find_stale_files guards against invalid max_files values."""
 
@@ -1556,7 +1486,6 @@ class TestFindStaleMaxFilesGuard:
         assert stale == []
 
 
-
 class TestHandleIndexStripAfterTruncation:
     """handle_index correctly strips content[:2000] to avoid storing whitespace."""
 
@@ -1567,7 +1496,6 @@ class TestHandleIndexStripAfterTruncation:
         server.handle_index(str(f))
         assert len(server.store) == 1
         # chunk = "x" + " " * 1999, .strip() -> "x", stored
-
 
 
 class TestEnsureIndexConstructFails:
@@ -1583,7 +1511,6 @@ class TestEnsureIndexConstructFails:
             server.ensure_index()
 
 
-
 class TestIndexDirectoryMtimeFailure:
     """index_directory handles os.path.getmtime failure gracefully."""
 
@@ -1595,7 +1522,6 @@ class TestIndexDirectoryMtimeFailure:
         mocker.patch("os.path.getmtime", side_effect=OSError("stale handle"))
         result = server.index_directory(str(d))
         assert "error" not in result.lower()
-
 
 
 class TestIndexDirectoryRemovedFilesOnly:
@@ -1612,7 +1538,6 @@ class TestIndexDirectoryRemovedFilesOnly:
         assert "to remove" in result
 
 
-
 class TestIndexStatsWorkerStatusReflectsChange:
     """get_index_stats shows current worker status."""
 
@@ -1627,7 +1552,6 @@ class TestIndexStatsWorkerStatusReflectsChange:
         assert "indexing" in result
 
 
-
 class TestHandleIndexEncodeReturnsNone:
     """handle_index tolerates model.encode returning None."""
 
@@ -1640,17 +1564,19 @@ class TestHandleIndexEncodeReturnsNone:
         assert len(server.store) == 0
 
 
-
 class TestFindStaleFloatMaxFiles:
     """find_stale_files with float max_files."""
 
     def test_float_max_files_clamps(self, populated_state, mocker):
-        mocker.patch.object(server, "meta", {
-            "/old.py": {"mtime": 100.0, "size": 10, "last_indexed": 100.0},
-        })
+        mocker.patch.object(
+            server,
+            "meta",
+            {
+                "/old.py": {"mtime": 100.0, "size": 10, "last_indexed": 100.0},
+            },
+        )
         stale = server.find_stale_files(max_age_days=0, max_files=1.5)
         assert len(stale) <= 1
-
 
 
 class TestIndexDirectoryNonePath:
@@ -1673,14 +1599,15 @@ class TestIndexDirectoryNonePath:
         assert "error" in result.lower()
 
 
-
 class TestHandleSignalSigterm:
     """Signal handler for SIGTERM is registered and calls exit."""
 
     def test_sigterm_handler_registered(self, mocker):
         registered = {}
+
         def track_signal(signum, handler):
             registered[signum] = handler
+
         mocker.patch("server.os._exit")
         mocker.patch("server.log")
         mocker.patch("server.validate_environment")
@@ -1696,20 +1623,19 @@ class TestHandleSignalSigterm:
         assert sig_module.SIGTERM in registered
 
 
-
 class TestHandleRemoveIndexRemoveBaseException:
     """handle_remove tolerates index.remove raising a BaseException subclass."""
 
     def test_base_exception_on_remove_does_not_propagate(self, mock_index):
         class CustomBase(BaseException):
             pass
+
         mock_index.remove.side_effect = CustomBase("base die")
         server.meta["/a.py"] = {"id": 1}
         server.store[1] = {"path": "/a.py", "content": "x"}
         server.handle_remove("/a.py")
         assert "/a.py" not in server.meta
         assert 1 not in server.store
-
 
 
 class TestIndexDirectoryIndividualFileGetmtimeFailure:
@@ -1721,14 +1647,15 @@ class TestIndexDirectoryIndividualFileGetmtimeFailure:
         (d / "good.py").write_text("x = 1")
         (d / "bad.py").write_text("y = 2")
         original_getmtime = os.path.getmtime
+
         def flaky_getmtime(path):
             if "bad" in path:
                 raise OSError("permission denied")
             return original_getmtime(path)
+
         mocker.patch("os.path.getmtime", flaky_getmtime)
         result = server.index_directory(str(d))
         assert "error" not in result.lower()
-
 
 
 class TestHandleIndexFileDeletedDuringRead:
@@ -1739,14 +1666,15 @@ class TestHandleIndexFileDeletedDuringRead:
         f.write_text("x = 1")
         server.current_id = 1
         original_open = open
+
         def delete_then_open(path, *a, **kw):
             if path == str(f):
                 f.unlink()
             return original_open(path, *a, **kw)
+
         mocker.patch("builtins.open", delete_then_open)
         server.handle_index(str(f))
         assert str(f) not in server.meta
-
 
 
 class TestIndexDirectoryGetmtimeRaiseOnExisting:
@@ -1764,7 +1692,6 @@ class TestIndexDirectoryGetmtimeRaiseOnExisting:
         assert "Queued" not in result
 
 
-
 class TestHandleIndexCustomEmptyObject:
     """handle_index tolerates model.encode returning a custom object with __len__=0."""
 
@@ -1772,13 +1699,13 @@ class TestHandleIndexCustomEmptyObject:
         class EmptyLen:
             def __len__(self):
                 return 0
+
         mock_model.encode.return_value = EmptyLen()
         f = tmp_path / "f.py"
         f.write_text("x = 1")
         server.current_id = 1
         server.handle_index(str(f))
         assert len(server.store) == 0
-
 
 
 class TestHandleIndexReindexConcurrent:
@@ -1789,11 +1716,13 @@ class TestHandleIndexReindexConcurrent:
         f.write_text("x = 1")
         server.current_id = 1
         errors = []
+
         def index_call():
             try:
                 server.handle_index(str(f))
             except Exception:
                 errors.append("fail")
+
         t1 = threading.Thread(target=index_call)
         t2 = threading.Thread(target=index_call)
         t1.start()
@@ -1801,7 +1730,6 @@ class TestHandleIndexReindexConcurrent:
         t1.join(timeout=3)
         t2.join(timeout=3)
         assert len(errors) == 0
-
 
 
 class TestEnsureIndexAlreadyLoaded:
@@ -1813,7 +1741,6 @@ class TestEnsureIndexAlreadyLoaded:
         assert server.index is prev
 
 
-
 class TestHandleRemoveIndexNonePreservesMeta:
     """handle_remove preserves meta when index is None."""
 
@@ -1822,7 +1749,6 @@ class TestHandleRemoveIndexNonePreservesMeta:
         server.meta["/a.py"] = {"id": 1}
         server.handle_remove("/a.py")
         assert "/a.py" in server.meta
-
 
 
 class TestHandleIndexEncodeWrongShapeFails:
@@ -1837,7 +1763,6 @@ class TestHandleIndexEncodeWrongShapeFails:
         assert len(server.store) == 1  # scalar 42 passes through to add_with_ids
 
 
-
 class TestIndexDirectoryGetmtimeOnNewFile:
     """index_directory skips getmtime for new (untracked) files."""
 
@@ -1847,38 +1772,57 @@ class TestIndexDirectoryGetmtimeOnNewFile:
         (d / "new.py").write_text("x = 1")
         calls = []
         original_getmtime = os.path.getmtime
+
         def tracking_getmtime(path):
             calls.append(path)
             return original_getmtime(path)
+
         mocker.patch("os.path.getmtime", tracking_getmtime)
         server.index_directory(str(d))
         new_file_path = os.path.normpath(str(d / "new.py"))
         assert new_file_path not in calls
 
 
-
 class TestHandleIndexModelIndexGuards:
-    """handle_index guards when model or index is None."""
+    """handle_index returns early when model or index is None."""
 
     def test_handle_index_model_none_returns_early(self, mock_index):
-        f = "/tmp/test.py"
         server.model = None
-        server.handle_index(f)
+        server.handle_index("/tmp/test.py")
         assert len(server.store) == 0
 
     def test_handle_index_index_none_returns_early(self, mock_model):
-        f = "/tmp/test.py"
         server.index = None
-        server.handle_index(f)
+        server.handle_index("/tmp/test.py")
         assert len(server.store) == 0
 
     def test_handle_index_both_none_returns_early(self):
-        f = "/tmp/test.py"
         server.model = None
         server.index = None
-        server.handle_index(f)
+        server.handle_index("/tmp/test.py")
         assert len(server.store) == 0
 
+    def test_both_none_with_tmp_path(self, tmp_path):
+        server.model = None
+        server.index = None
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.handle_index(str(f))
+        assert len(server.store) == 0
+
+    def test_index_none_with_tmp_path(self, tmp_path, mock_model):
+        server.index = None
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.handle_index(str(f))
+        assert len(server.store) == 0
+
+    def test_model_none_with_tmp_path(self, tmp_path, mock_index):
+        server.model = None
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.handle_index(str(f))
+        assert len(server.store) == 0
 
 
 class TestFindStaleFilesAllQualify:
@@ -1898,7 +1842,6 @@ class TestFindStaleFilesAllQualify:
         }
         stale = server.find_stale_files(max_age_days=7, max_files=10)
         assert "/neg.py" in stale
-
 
 
 class TestIndexStatusMixedLoadStates:
@@ -1930,7 +1873,6 @@ class TestIndexStatusMixedLoadStates:
         assert "Idle" in result
 
 
-
 class TestGetIndexStatsDirectoryPath:
     """get_index_stats handles INDEX_PATH being a directory."""
 
@@ -1948,7 +1890,6 @@ class TestGetIndexStatsDirectoryPath:
             monkeypatch.undo()
 
 
-
 class TestIndexDirectoryEnsureResourcesFailure:
     """index_directory handles ensure_resources failure gracefully."""
 
@@ -1959,7 +1900,6 @@ class TestIndexDirectoryEnsureResourcesFailure:
         (d / "main.py").write_text("x = 1")
         with pytest.raises(RuntimeError, match="model download failed"):
             server.index_directory(str(d))
-
 
 
 class TestIndexStatsResourceModelLoadedNoIndex:
@@ -1973,7 +1913,6 @@ class TestIndexStatsResourceModelLoadedNoIndex:
         assert data["model_loaded"] is True
 
 
-
 class TestIndexDirectoryTrailingWhitespacePath:
     """index_directory with paths containing trailing whitespace."""
 
@@ -1984,7 +1923,6 @@ class TestIndexDirectoryTrailingWhitespacePath:
         path_with_space = str(d) + "  "
         result = server.index_directory(path_with_space)
         assert "queued" in result.lower() or "up to date" in result.lower()
-
 
 
 class TestHandleIndexFifoGuard:
@@ -2011,7 +1949,6 @@ class TestHandleIndexFifoGuard:
         spy.assert_called_with(str(f))
 
 
-
 class TestHandleIndexEncodeEdgeCases:
     """handle_index tolerates unusual model.encode return types."""
 
@@ -2034,6 +1971,7 @@ class TestHandleIndexEncodeEdgeCases:
     def test_encode_returns_generator_does_not_crash(self, tmp_path, mock_model, mock_index):
         def gen():
             yield np.random.rand(384).astype(np.float32)
+
         mock_model.encode.return_value = gen()
         f = tmp_path / "f.py"
         f.write_text("x = 1")
@@ -2048,34 +1986,6 @@ class TestHandleIndexEncodeEdgeCases:
         server.current_id = 1
         server.handle_index(str(f))
         assert len(server.store) == 1  # Turbovec may accept wrong dim; we don't validate
-
-
-
-class TestHandleIndexModelIndexGuards:
-    """handle_index returns early when model or index is None."""
-
-    def test_both_none_returns_early(self, tmp_path):
-        server.model = None
-        server.index = None
-        f = tmp_path / "f.py"
-        f.write_text("x = 1")
-        server.handle_index(str(f))
-        assert len(server.store) == 0
-
-    def test_index_none_returns_early(self, tmp_path, mock_model):
-        server.index = None
-        f = tmp_path / "f.py"
-        f.write_text("x = 1")
-        server.handle_index(str(f))
-        assert len(server.store) == 0
-
-    def test_model_none_returns_early(self, tmp_path, mock_index):
-        server.model = None
-        f = tmp_path / "f.py"
-        f.write_text("x = 1")
-        server.handle_index(str(f))
-        assert len(server.store) == 0
-
 
 
 class TestIndexStatsErrorConsistency:
@@ -2107,7 +2017,6 @@ class TestIndexStatsErrorConsistency:
         assert data["queue_depth"] == 2
 
 
-
 class TestIndexDirectoryPathNormalization:
     """index_directory path normalization across platforms."""
 
@@ -2131,6 +2040,7 @@ class TestIndexDirectoryPathNormalization:
 
     def test_relative_path_works(self, tmp_path, mock_model, mock_index, mocker):
         import os
+
         original_cwd = os.getcwd()
         try:
             os.chdir(str(tmp_path))
@@ -2142,7 +2052,6 @@ class TestIndexDirectoryPathNormalization:
             assert "queued" in result.lower() or "up to date" in result.lower()
         finally:
             os.chdir(original_cwd)
-
 
 
 class TestHandleIndexEmptyEncodeList:
@@ -2165,7 +2074,6 @@ class TestHandleIndexEmptyEncodeList:
         assert mock_index.add_with_ids.called
 
 
-
 class TestIndexDirectoryWithSymlinkToFile:
     """index_directory handles symlinked files (os.walk with followlinks=False)."""
 
@@ -2182,7 +2090,6 @@ class TestIndexDirectoryWithSymlinkToFile:
         assert depth <= 2
 
 
-
 class TestHandleRemoveRaceAcrossFiles:
     """handle_remove correctly removes multiple files sequentially."""
 
@@ -2195,7 +2102,6 @@ class TestHandleRemoveRaceAcrossFiles:
             server.handle_remove(f"/f{i}.py")
         assert len(server.meta) == 0
         assert len(server.store) == 0
-
 
 
 class TestHandleIndexIsFileOSError:
@@ -2224,7 +2130,6 @@ class TestHandleIndexIsFileOSError:
         assert server.worker_state["errors"] == 0
 
 
-
 class TestIndexDirectoryGenericOSError:
     """index_directory handles generic OSError from os.walk."""
 
@@ -2235,7 +2140,6 @@ class TestIndexDirectoryGenericOSError:
         result = server.index_directory(str(d))
         assert "Error" in result
         assert "Cannot read" in result
-
 
 
 class TestHandleIndexEncodeCrash:
@@ -2271,6 +2175,7 @@ class TestHandleIndexEncodeCrash:
 
         class ResetEncode:
             call_count = 0
+
             def __call__(self, *a, **kw):
                 self.call_count += 1
                 if self.call_count == 1:
@@ -2287,7 +2192,6 @@ class TestHandleIndexEncodeCrash:
         assert server.worker_state["errors"] >= 1
 
 
-
 class TestHandleIndexSingleCharFile:
     """handle_index with a 1-character file (boundary test)."""
 
@@ -2300,7 +2204,6 @@ class TestHandleIndexSingleCharFile:
         server.handle_index(str(f))
         assert 1 in server.store
         assert server.store[1]["content"] == "x"
-
 
 
 class TestHandleIndexOldEntryNonDict:
@@ -2318,7 +2221,6 @@ class TestHandleIndexOldEntryNonDict:
         assert isinstance(server.meta[str(f)], dict)
 
 
-
 class TestHandleRemoveIdNone:
     """handle_remove with meta entry having id=None."""
 
@@ -2326,7 +2228,6 @@ class TestHandleRemoveIdNone:
         server.meta["/f.py"] = {"id": None, "mtime": 0, "size": 0, "last_indexed": 0}
         server.handle_remove("/f.py")
         assert "/f.py" not in server.meta
-
 
 
 class TestHandleIndexOldVectorBaseException:
@@ -2348,7 +2249,6 @@ class TestHandleIndexOldVectorBaseException:
             server.handle_index(str(f))
 
 
-
 class TestIndexDirectoryEmptyString:
     """index_directory rejects empty string directory path."""
 
@@ -2363,7 +2263,6 @@ class TestIndexDirectoryEmptyString:
         assert "empty" in result.lower()
 
 
-
 class TestHandleRemoveIdNoneInMetaStorePresent:
     """handle_remove with id=None but store entry present."""
 
@@ -2375,7 +2274,6 @@ class TestHandleRemoveIdNoneInMetaStorePresent:
         assert 42 in server.store  # store entry for unrelated id is preserved
 
 
-
 class TestSearchCodebaseIndexSearchRaise:
     """search_codebase propagates exception from index.search (handled by FastMCP)."""
 
@@ -2383,7 +2281,6 @@ class TestSearchCodebaseIndexSearchRaise:
         mock_index.search.side_effect = RuntimeError("search backend crashed")
         with pytest.raises(RuntimeError, match="search backend crashed"):
             server.search_codebase("query")
-
 
 
 class TestFileWithBOM:
@@ -2399,7 +2296,6 @@ class TestFileWithBOM:
         assert 1 in server.store
         content = server.store[1]["content"]
         assert "print" in content
-
 
 
 class TestZeroByteFile:
@@ -2421,7 +2317,6 @@ class TestZeroByteFile:
         assert server.meta[str(f)]["id"] == 1
 
 
-
 class TestHandleIndexEmptyNdarray:
     """handle_index tolerates model.encode returning a 0-d ndarray."""
 
@@ -2434,7 +2329,6 @@ class TestHandleIndexEmptyNdarray:
         assert not mock_index.add_with_ids.called
 
 
-
 class TestHandleRemoveIdZero:
     """handle_remove with id=0 (falsy but valid)."""
 
@@ -2444,7 +2338,6 @@ class TestHandleRemoveIdZero:
         server.handle_remove("/zero.py")
         assert "/zero.py" not in server.meta
         assert 0 not in server.store
-
 
 
 class TestHandleIndexReindexMissingIdKey:
@@ -2462,7 +2355,6 @@ class TestHandleIndexReindexMissingIdKey:
         assert server.meta[str(f)]["id"] == 1
 
 
-
 class TestEnsureIndexTvimIsDirectory:
     """ensure_index handles INDEX_PATH being a directory rather than a file."""
 
@@ -2476,11 +2368,9 @@ class TestEnsureIndexTvimIsDirectory:
         assert server.index is not None
 
 
-
 class TestGetIndexStatsIndexPathNotExists:
     """get_index_stats works when INDEX_PATH does not exist."""
 
     def test_index_path_does_not_exist(self):
         result = server.get_index_stats()
         assert "Disk: 0.0 KB" in result
-

@@ -1,20 +1,15 @@
 """
 Auto-generated test file for queue.
 """
-import builtins
-import json
-import os
-import time
-import threading
-import signal as sig_module
-from collections import deque
 
-import numpy as np
+import threading
+import time
+
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import given
+from hypothesis import strategies as st
 
 import server
-
 
 
 class TestQueueManagement:
@@ -67,7 +62,6 @@ class TestQueueManagement:
         assert priorities == ["remove", "new", "unknown"]
 
 
-
 class TestQueueEdgeCases:
     def test_dequeue_batch_zero(self):
         server.enqueue("new", "/a.py")
@@ -107,7 +101,6 @@ class TestQueueEdgeCases:
         assert server.queue_depth() == 1
 
 
-
 class TestEnqueuePriorityEdgeCases:
     def test_unknown_priority_sorted_last(self):
         server.enqueue("new", "/a.py")
@@ -139,7 +132,6 @@ class TestEnqueuePriorityEdgeCases:
         batch = server.dequeue_batch(10)
         result = [p for p, _ in batch]
         assert result == ["remove", "new", "new", "changed", "reindex"]
-
 
 
 class TestPropertyBasedQueue:
@@ -190,7 +182,6 @@ class TestPropertyBasedQueue:
         assert len(batch) == expected
 
 
-
 class TestBackgroundWorkerEmptyQueue:
     def test_worker_does_not_consume_cpu_on_empty_queue(self, mock_model, mock_index, mocker):
         mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
@@ -213,7 +204,6 @@ class TestBackgroundWorkerEmptyQueue:
         assert all(s >= 0.1 for s in time_calls), f"Sleeps too small: {time_calls}"
 
 
-
 class TestEnqueueAfterDequeue:
     def test_enqueue_after_batch_maintains_count(self):
         for i in range(5):
@@ -227,7 +217,6 @@ class TestEnqueueAfterDequeue:
         assert server.queue_depth() == 0
         server.enqueue("new", "/a.py")
         assert server.queue_depth() == 1
-
 
 
 class TestEnqueueEdgeCases:
@@ -261,7 +250,6 @@ class TestEnqueueEdgeCases:
         assert server.queue_depth() == 1
 
 
-
 class TestDequeueWithMixedPrioritiesLarge:
     """Dequeue maintains priority ordering with many items."""
 
@@ -288,7 +276,6 @@ class TestDequeueWithMixedPrioritiesLarge:
         assert server.queue_depth() == 15
 
 
-
 class TestEnqueueValidationEdgeCases:
     """enqueue rejects non-string and empty file_paths."""
 
@@ -306,7 +293,6 @@ class TestEnqueueValidationEdgeCases:
         assert server.queue_depth() == 1
         batch = server.dequeue_batch(10)
         assert batch[0][1] == long_path
-
 
 
 class TestDequeueExactFit:
@@ -327,7 +313,6 @@ class TestDequeueExactFit:
         assert server.queue_depth() == 0
 
 
-
 class TestDequeueBatchFloatSize:
     """dequeue_batch handles float batch_size gracefully."""
 
@@ -337,7 +322,6 @@ class TestDequeueBatchFloatSize:
         batch = server.dequeue_batch(2.7)
         assert len(batch) == 2
         assert server.queue_depth() == 3
-
 
 
 class TestEnqueueBytes:
@@ -350,7 +334,6 @@ class TestEnqueueBytes:
     def test_enqueue_bytearray_path_skipped(self):
         server.enqueue("new", bytearray(b"/path.py"))
         assert server.queue_depth() == 0
-
 
 
 class TestBackgroundWorkerEmptyQueueStaleOnly:
@@ -375,7 +358,6 @@ class TestBackgroundWorkerEmptyQueueStaleOnly:
         assert server.worker_state["processed"] >= 1
 
 
-
 class TestGetIndexStatsQueueDepth:
     """get_index_stats reflects queue depth."""
 
@@ -384,7 +366,6 @@ class TestGetIndexStatsQueueDepth:
         server.enqueue("new", "/q.py")
         result = server.get_index_stats()
         assert "2 queued" in result
-
 
 
 class TestDequeueNegativeBatchEdge:
@@ -404,24 +385,20 @@ class TestDequeueNegativeBatchEdge:
         assert server.queue_depth() == 1
 
 
-
 class TestDequeueBatchSpecialFloats:
     """dequeue_batch handles NaN and infinity batch_size."""
 
     def test_nan_batch_size_returns_empty(self):
         server.enqueue("new", "/a.py")
-        import math
         batch = server.dequeue_batch(float("nan"))
         assert len(batch) == 0
         assert server.queue_depth() == 1
 
     def test_inf_batch_size_returns_empty(self):
         server.enqueue("new", "/a.py")
-        import math
         batch = server.dequeue_batch(float("inf"))
         assert len(batch) == 0
         assert server.queue_depth() == 1
-
 
 
 class TestEnqueueNonePriority:
@@ -433,7 +410,6 @@ class TestEnqueueNonePriority:
         assert len(batch) == 1
         assert batch[0][0] is None
         assert batch[0][1] == "/a.py"
-
 
 
 class TestBackgroundWorkerDoesNotReEnqueueStaleInfinitely:
@@ -451,18 +427,19 @@ class TestBackgroundWorkerDoesNotReEnqueueStaleInfinitely:
         mocker.patch.object(server, "find_stale_files", return_value=[str(f)])
         iter_count = [0]
         original_sleep = time.sleep
+
         def tracking_sleep(s):
             iter_count[0] += 1
             if iter_count[0] >= 5:
                 server._stop_event.set()
             original_sleep(min(s, 0.02))
+
         mocker.patch.object(time, "sleep", side_effect=tracking_sleep)
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
         t.join(timeout=5)
         assert iter_count[0] < 20
-
 
 
 class TestDequeueNanInfPreservesRemaining:
@@ -481,7 +458,6 @@ class TestDequeueNanInfPreservesRemaining:
         assert server.queue_depth() == 3
 
 
-
 class TestDequeueBatchInfinityAndNanGuards:
     """Edge cases for the try/except guard on batch_size conversion."""
 
@@ -498,15 +474,13 @@ class TestDequeueBatchInfinityAndNanGuards:
         assert server.queue_depth() == 1
 
 
-
 class TestDequeueBatchOverflowError:
     """dequeue_batch tolerates huge int batch_size."""
 
     def test_huge_int_batch_size_works(self):
         server.enqueue("new", "/a.py")
-        batch = server.dequeue_batch(10 ** 100)
+        batch = server.dequeue_batch(10**100)
         assert len(batch) == 1
-
 
 
 class TestBackgroundWorkerEmptyQueueNoStaleNop:
@@ -525,7 +499,6 @@ class TestBackgroundWorkerEmptyQueueNoStaleNop:
         assert server.worker_state["processed"] == 0
 
 
-
 class TestEnqueueNonePriorityAppended:
     """enqueue with None priority is appended (last in sort)."""
 
@@ -534,7 +507,6 @@ class TestEnqueueNonePriorityAppended:
         assert server.queue_depth() == 1
         batch = server.dequeue_batch(10)
         assert batch[0][0] is None
-
 
 
 class TestEnqueueStress:
@@ -566,7 +538,6 @@ class TestEnqueueStress:
         assert total == 100
 
 
-
 class TestConcurrentDequeue:
     """Multiple threads can dequeue simultaneously."""
 
@@ -592,7 +563,6 @@ class TestConcurrentDequeue:
             t.join()
 
         assert sum(results) == 200
-
 
 
 class TestConcurrentEnqueueDequeueStress:
@@ -622,7 +592,6 @@ class TestConcurrentEnqueueDequeueStress:
         for t in threads:
             t.join()
         assert len(errors) == 0
-
 
 
 class TestDequeueBatchEdgeTypes:
@@ -660,7 +629,6 @@ class TestDequeueBatchEdgeTypes:
         assert server.queue_depth() == 1
 
 
-
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 class TestBackgroundWorkerDequeueException:
     """Worker survives dequeue_batch raising an exception."""
@@ -670,11 +638,13 @@ class TestBackgroundWorkerDequeueException:
         mocker.patch.object(server, "find_stale_files", return_value=[])
         mock_dequeue = mocker.patch.object(server, "dequeue_batch")
         call_count = [0]
+
         def flaky_dequeue(*a, **kw):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise RuntimeError("dequeue crashed")
             return []
+
         mock_dequeue.side_effect = flaky_dequeue
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
@@ -683,7 +653,6 @@ class TestBackgroundWorkerDequeueException:
         server._stop_event.set()
         t.join(timeout=1)
         assert not t.is_alive()
-
 
 
 class TestEnqueuePriorityOverflow:
@@ -706,5 +675,3 @@ class TestEnqueuePriorityOverflow:
         remove_end = max(i for i, p in enumerate(priorities) if p == "remove") if "remove" in priorities else -1
         new_start = min(i for i, p in enumerate(priorities) if p == "new") if "new" in priorities else 999
         assert remove_end < new_start
-
-

@@ -11,7 +11,7 @@ Messages (one per line):
 
 import json
 import sys
-import numpy as np
+
 from fastembed import TextEmbedding
 
 
@@ -22,7 +22,13 @@ def _pick_providers() -> list[str] | None:
     except ImportError:
         return None
     available = ort.get_available_providers()
-    preferred = ["CUDAExecutionProvider", "DmlExecutionProvider", "CoreMLExecutionProvider", "MIGraphXExecutionProvider", "ROCMExecutionProvider"]
+    preferred = [
+        "CUDAExecutionProvider",
+        "DmlExecutionProvider",
+        "CoreMLExecutionProvider",
+        "MIGraphXExecutionProvider",
+        "ROCMExecutionProvider",
+    ]
     matched = [p for p in preferred if p in available]
     if matched:
         return matched + ["CPUExecutionProvider"]
@@ -68,9 +74,7 @@ def main() -> None:
             sys.stdout.write(result + "\n")
             sys.stdout.flush()
         except Exception as e:
-            sys.stdout.write(
-                json.dumps({"id": req_id, "error": str(e)}, default=str) + "\n"
-            )
+            sys.stdout.write(json.dumps({"id": req_id, "error": str(e)}, default=str) + "\n")
             sys.stdout.flush()
 
 

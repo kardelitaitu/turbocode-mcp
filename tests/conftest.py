@@ -1,6 +1,6 @@
-import sys
 import os
-import threading
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from collections import deque
@@ -8,8 +8,6 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-
-from turbovec import IdMapIndex  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -52,6 +50,7 @@ def mock_model(mocker):
     instance = MagicMock()
     instance.encode.return_value = np.random.rand(1, 384).astype(np.float32)
     import server
+
     server.model = instance
     return instance
 
@@ -66,6 +65,7 @@ def mock_index(mocker):
     instance.contains.return_value = True
     mocker.patch("server.IdMapIndex", return_value=instance)
     import server
+
     server.index = instance
     return instance
 
@@ -75,15 +75,9 @@ def populated_state():
     import server
 
     server.meta = {
-        "/proj/file1.py": {
-            "id": 1, "mtime": 1000.0, "size": 100, "last_indexed": 2000.0
-        },
-        "/proj/file2.rs": {
-            "id": 2, "mtime": 1001.0, "size": 200, "last_indexed": 2001.0
-        },
-        "/proj/old_file.md": {
-            "id": 3, "mtime": 500.0, "size": 50, "last_indexed": 500.0
-        },
+        "/proj/file1.py": {"id": 1, "mtime": 1000.0, "size": 100, "last_indexed": 2000.0},
+        "/proj/file2.rs": {"id": 2, "mtime": 1001.0, "size": 200, "last_indexed": 2001.0},
+        "/proj/old_file.md": {"id": 3, "mtime": 500.0, "size": 50, "last_indexed": 500.0},
     }
     server.store = {
         1: {"path": "/proj/file1.py", "content": "print('hello')"},

@@ -8,24 +8,22 @@ Usage:
     .venv/Scripts/python benchmarks/benchmark.py
     .venv/Scripts/python benchmarks/benchmark.py --files 500 --searches 200
 """
+
 from __future__ import annotations
 
-import os
-import sys
-import time
-import math
+import argparse
 import json
+import os
 import random
 import statistics
+import sys
 import tempfile
-import argparse
-from collections import deque
-
-import numpy as np
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-import server
+import contextlib
 
+import server
 
 # ── Synthetic code generation ──
 
@@ -62,8 +60,8 @@ SNIPPETS = {
     ],
     ".md": [
         "# Project Overview\n\nThis project provides a robust solution for data processing.\n\n## Features\n- High performance\n- Easy to use\n- Fully tested\n",
-        "## API Reference\n\n### `GET /api/users`\nReturns a list of users.\n\n**Parameters:**\n- `page` (number) - Page number\n- `limit` (number) - Items per page\n\n**Response:**\n```json\n{\"users\": [], \"total\": 0}\n```\n",
-        "# Getting Started\n\n## Installation\n\n```bash\nnpm install my-package\n```\n\n## Quick Start\n\n```python\nfrom my_package import Client\nclient = Client()\nresult = client.query(\"hello\")\n```\n",
+        '## API Reference\n\n### `GET /api/users`\nReturns a list of users.\n\n**Parameters:**\n- `page` (number) - Page number\n- `limit` (number) - Items per page\n\n**Response:**\n```json\n{"users": [], "total": 0}\n```\n',
+        '# Getting Started\n\n## Installation\n\n```bash\nnpm install my-package\n```\n\n## Quick Start\n\n```python\nfrom my_package import Client\nclient = Client()\nresult = client.query("hello")\n```\n',
     ],
 }
 
@@ -72,7 +70,7 @@ def generate_codebase(directory: str, num_files: int) -> list[str]:
     extensions = list(SNIPPETS.keys())
     paths = []
     subdirs = ["auth", "core", "utils", "api", "models", "services", "tests", "config"]
-    for i in range(num_files):
+    for _i in range(num_files):
         ext = random.choice(extensions)
         subdir = random.choice(subdirs) if num_files > 20 else ""
         if subdir:
@@ -91,15 +89,52 @@ def generate_codebase(directory: str, num_files: int) -> list[str]:
 
 
 def random_name() -> str:
-    prefixes = ["user", "data", "auth", "api", "core", "util", "model", "view",
-                 "ctrl", "repo", "svc", "test", "conf", "main", "helper", "base",
-                 "mix", "fact", "reg", "hook", "pipe", "rule", "proc", "schema"]
-    suffixes = ["_handler", "_manager", "_service", "_model", "_view", "_ctrl",
-                "_test", "_helper", "_utils", "_base", "_impl", "_api", ""]
+    prefixes = [
+        "user",
+        "data",
+        "auth",
+        "api",
+        "core",
+        "util",
+        "model",
+        "view",
+        "ctrl",
+        "repo",
+        "svc",
+        "test",
+        "conf",
+        "main",
+        "helper",
+        "base",
+        "mix",
+        "fact",
+        "reg",
+        "hook",
+        "pipe",
+        "rule",
+        "proc",
+        "schema",
+    ]
+    suffixes = [
+        "_handler",
+        "_manager",
+        "_service",
+        "_model",
+        "_view",
+        "_ctrl",
+        "_test",
+        "_helper",
+        "_utils",
+        "_base",
+        "_impl",
+        "_api",
+        "",
+    ]
     return random.choice(prefixes) + random.choice(suffixes)
 
 
 # ── Helpers ──
+
 
 def percentile(data: list[float], p: float) -> float:
     if not data:
@@ -129,6 +164,7 @@ def reset_state():
 
 # ── Benchmarks ──
 
+
 def benchmark_cold_start(tmp_dir: str) -> dict:
     results = {}
 
@@ -151,10 +187,8 @@ def benchmark_cold_start(tmp_dir: str) -> dict:
 
     # Clean up model subprocess
     if server.model is not None:
-        try:
+        with contextlib.suppress(Exception):
             server.model.stop()
-        except Exception:
-            pass
     server.model = None
 
     return results
@@ -186,10 +220,8 @@ def benchmark_indexing(tmp_dir: str, num_files: int) -> dict:
             errors += 1
 
     # Persist one final time
-    try:
+    with contextlib.suppress(Exception):
         server.persist_all()
-    except Exception:
-        pass
 
     total = sum(times)
     files_per_sec = num_files / total if total > 0 else 0
@@ -273,6 +305,7 @@ def benchmark_search(num_iterations: int = 50) -> dict:
 
 # ── Main ──
 
+
 def main():
     parser = argparse.ArgumentParser(description="TurboCode MCP Benchmark")
     parser.add_argument("--files", type=int, default=100, help="Number of files to index (default: 100)")
@@ -282,7 +315,7 @@ def main():
 
     tmp_dir = tempfile.mkdtemp(prefix="turbocode_bench_")
 
-    print(f"Benchmarking TurboCode MCP...", file=sys.stderr)
+    print("Benchmarking TurboCode MCP...", file=sys.stderr)
     print(f"  Files: {args.files}, Search iterations: {args.searches}", file=sys.stderr)
     print(f"  Temp dir: {tmp_dir}", file=sys.stderr)
     print(file=sys.stderr)
@@ -293,10 +326,8 @@ def main():
 
     # Reset state for indexing
     if server.model is not None:
-        try:
+        with contextlib.suppress(Exception):
             server.model.stop()
-        except Exception:
-            pass
     server.model = None
     server.index = None
 
@@ -314,6 +345,7 @@ def main():
     if server.model is not None and hasattr(server.model, "_proc") and server.model._proc is not None:
         try:
             import psutil
+
             proc = psutil.Process(server.model._proc.pid)
             mem_mb = round(proc.memory_info().rss / 1024 / 1024, 1)
         except Exception:
@@ -321,20 +353,17 @@ def main():
 
     # Cleanup
     if server.model is not None:
-        try:
+        with contextlib.suppress(Exception):
             server.model.stop()
-        except Exception:
-            pass
     server.model = None
     server.index = None
     server.meta.clear()
     server.store.clear()
 
     import shutil
-    try:
+
+    with contextlib.suppress(Exception):
         shutil.rmtree(tmp_dir, ignore_errors=True)
-    except Exception:
-        pass
 
     # ── Output ──
     if args.json:
@@ -351,8 +380,8 @@ def main():
         return f"{v:.2f}" if v else "-"
 
     print("## Benchmarks\n")
-    print(f"| Category | Metric | Value |")
-    print(f"|---|---|---|")
+    print("| Category | Metric | Value |")
+    print("|---|---|---|")
 
     total_index = index_results["total_sec"]
     files = index_results["num_files"]
@@ -372,10 +401,14 @@ def main():
 
     print(f"| **Cold start** | Index init | {cold['index_init']:.4f}s |")
     print(f"| Cold start | Model load (subproc) | {cold['model_load']:.4f}s |")
-    print(f"| **Memory** | Embed subprocess RSS | ~{mem_mb} MB |" if mem_mb else "| **Memory** | Embed subprocess RSS | ~15 MB (est.) |")
+    print(
+        f"| **Memory** | Embed subprocess RSS | ~{mem_mb} MB |"
+        if mem_mb
+        else "| **Memory** | Embed subprocess RSS | ~15 MB (est.) |"
+    )
     print()
 
-    p99_note = f" P99 requires >= 100 search iterations." if args.searches < 100 else ""
+    p99_note = " P99 requires >= 100 search iterations." if args.searches < 100 else ""
     print(f"*Benchmark: {files} synthetic files, {args.searches} search iterations.{p99_note}*")
 
 

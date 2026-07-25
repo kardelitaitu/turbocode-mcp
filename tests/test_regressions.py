@@ -1,5 +1,4 @@
 import json
-import os
 import time
 
 import numpy as np
@@ -45,15 +44,17 @@ class TestColdStartRecovery:
         store_path = d / "store.json"
         meta_path.write_text(payload, encoding="utf-8")
         store_path.write_text(
-            json.dumps({
-                "1": {
-                    "path": "/a.py",
-                    "content": "x",
-                    "mtime": 10,
-                    "size": 1,
-                    "last_indexed": 20,
+            json.dumps(
+                {
+                    "1": {
+                        "path": "/a.py",
+                        "content": "x",
+                        "mtime": 10,
+                        "size": 1,
+                        "last_indexed": 20,
+                    }
                 }
-            }),
+            ),
             encoding="utf-8",
         )
 
@@ -74,8 +75,7 @@ class TestStaleSampling:
     def test_find_stale_files_samples_when_over_limit(self, mocker, tracked_count):
         now = time.time()
         server.meta = {
-            f"/stale-{idx}.py": {"id": idx, "last_indexed": now - 14 * 86400}
-            for idx in range(tracked_count)
+            f"/stale-{idx}.py": {"id": idx, "last_indexed": now - 14 * 86400} for idx in range(tracked_count)
         }
         sample = mocker.patch("server.random.sample", side_effect=lambda items, n: items[:n])
 

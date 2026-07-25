@@ -1,20 +1,13 @@
 """
 Auto-generated test file for search.
 """
-import builtins
-import json
-import os
-import time
-import threading
-import signal as sig_module
-from collections import deque
 
 import numpy as np
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 import server
-
 
 
 class TestToolSearchCodebase:
@@ -34,7 +27,6 @@ class TestToolSearchCodebase:
     def test_search_clamps_k_high(self, mock_model, mock_index, populated_state):
         result = server.search_codebase("test", k=50)
         assert isinstance(result, str)
-
 
 
 class TestSearchCodebaseEdgeCases:
@@ -82,13 +74,11 @@ class TestSearchCodebaseEdgeCases:
         assert len(result) > 0
 
 
-
 class TestSearchCodebaseModelFailure:
     def test_model_encode_failure_returns_error(self, mock_model, mock_index, populated_state):
         mock_model.encode.side_effect = RuntimeError("OOM")
         with pytest.raises(RuntimeError, match="OOM"):
             server.search_codebase("test query")
-
 
 
 class TestSearchCodebaseKEdgeCases:
@@ -103,7 +93,6 @@ class TestSearchCodebaseKEdgeCases:
     def test_search_with_k_above_max_clamps_to_20(self, mock_model, mock_index, populated_state):
         result = server.search_codebase("test", k=100)
         assert "No results" not in result
-
 
 
 class TestSearchCodebaseMalformedModel:
@@ -124,16 +113,16 @@ class TestSearchCodebaseMalformedModel:
 
     def test_model_encode_returns_non_array(self, mock_model, mock_index, populated_state):
         mock_model.encode.return_value = "not an array"
-        with pytest.raises(Exception):
+        with pytest.raises((TypeError, AttributeError, RuntimeError)):
             server.search_codebase("query")
-
 
 
 class TestSearchCodebaseSpecialCharsInContent:
     def test_search_with_special_chars_in_results(self, mock_model, mock_index, populated_state):
         server.store[1] = {"path": "/test.py", "content": "import re  # $peci@l ch@rs"}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("special")
         assert "$peci@l ch@rs" in result
@@ -141,11 +130,11 @@ class TestSearchCodebaseSpecialCharsInContent:
     def test_search_results_contain_backticks_and_code(self, mock_model, mock_index, populated_state):
         server.store[1] = {"path": "/code.py", "content": "```python\nx = 1\n```"}
         mock_index.search.return_value = (
-            np.array([[0.99]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.99]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("code")
         assert "```" in result
-
 
 
 class TestPropertyBasedSearch:
@@ -175,14 +164,14 @@ class TestPropertyBasedSearch:
         assert count == min(k, 3)  # limited by available store entries
 
 
-
 class TestSearchCodebaseShortContent:
     """Search results don't append ... for short content."""
 
     def test_short_content_no_ellipsis(self, mock_model, mock_index, populated_state):
         server.store[1] = {"path": "/short.py", "content": "x = 1"}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("test")
         assert "x = 1" in result
@@ -194,7 +183,8 @@ class TestSearchCodebaseShortContent:
         long = "x" * 600
         server.store[1] = {"path": "/long.py", "content": long}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("test")
         assert "..." in result
@@ -203,12 +193,12 @@ class TestSearchCodebaseShortContent:
         content = "x" * 500
         server.store[1] = {"path": "/exact.py", "content": content}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("test")
         assert "x" * 500 in result
         assert "..." not in result
-
 
 
 class TestSearchCodebaseWithMalformedStore:
@@ -217,7 +207,8 @@ class TestSearchCodebaseWithMalformedStore:
     def test_store_entry_missing_path(self, mock_model, mock_index, populated_state):
         server.store[99] = {"content": "orphan content"}  # no "path" key
         mock_index.search.return_value = (
-            np.array([[0.9]]), np.array([[99]], dtype=np.uint64),
+            np.array([[0.9]]),
+            np.array([[99]], dtype=np.uint64),
         )
         result = server.search_codebase("test")
         assert "unknown" in result
@@ -225,14 +216,16 @@ class TestSearchCodebaseWithMalformedStore:
     def test_store_entry_is_none(self, mock_model, mock_index, populated_state):
         server.store[99] = None
         mock_index.search.return_value = (
-            np.array([[0.9]]), np.array([[99]], dtype=np.uint64),
+            np.array([[0.9]]),
+            np.array([[99]], dtype=np.uint64),
         )
         result = server.search_codebase("test")
         assert "No results" in result or "unknown" not in result
 
     def test_search_k_at_max_clamps(self, mock_model, mock_index, populated_state):
         mock_index.search.return_value = (
-            np.array([list(range(20))]), np.array([list(range(1, 21))], dtype=np.uint64),
+            np.array([list(range(20))]),
+            np.array([list(range(1, 21))], dtype=np.uint64),
         )
         result = server.search_codebase("test", k=20)
         assert isinstance(result, str)
@@ -240,18 +233,19 @@ class TestSearchCodebaseWithMalformedStore:
 
     def test_search_k_above_max_clamps(self, mock_model, mock_index, populated_state):
         mock_index.search.return_value = (
-            np.array([list(range(20))]), np.array([list(range(1, 21))], dtype=np.uint64),
+            np.array([list(range(20))]),
+            np.array([list(range(1, 21))], dtype=np.uint64),
         )
         result = server.search_codebase("test", k=100)
         assert isinstance(result, str)
 
     def test_search_ids_not_in_store(self, mock_model, mock_index, populated_state):
         mock_index.search.return_value = (
-            np.array([[0.9, 0.8]]), np.array([[99, 100]], dtype=np.uint64),
+            np.array([[0.9, 0.8]]),
+            np.array([[99, 100]], dtype=np.uint64),
         )
         result = server.search_codebase("test")
         assert "No results" in result
-
 
 
 class TestSearchCodebaseUnicode:
@@ -264,12 +258,12 @@ class TestSearchCodebaseUnicode:
     def test_search_unicode_in_results(self, mock_model, mock_index, populated_state):
         server.store[1] = {"path": "/cafe.py", "content": "def café():\n    return 'über cool'\n"}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("cafe")
         assert "café" in result
         assert "über" in result
-
 
 
 class TestSearchCodebaseNoResults:
@@ -297,7 +291,6 @@ class TestSearchCodebaseNoResults:
         assert "queued" not in result
 
 
-
 class TestSearchCodebaseStoreEdgeCases:
     """Search handles missing or malformed store entries."""
 
@@ -320,7 +313,6 @@ class TestSearchCodebaseStoreEdgeCases:
         assert "No results found" in result
 
 
-
 class TestSearchKNoneGuard:
     """search_codebase handles k=None and k=0 without crashing."""
 
@@ -341,7 +333,6 @@ class TestSearchKNoneGuard:
         )
         result = server.search_codebase("query", k=0)
         assert "/a.py" in result
-
 
 
 class TestSearchResultExactFormat:
@@ -368,7 +359,6 @@ class TestSearchResultExactFormat:
         assert "---" in result
 
 
-
 class TestSearchContentDisplay:
     """search_codebase display truncation and ellipsis."""
 
@@ -393,14 +383,14 @@ class TestSearchContentDisplay:
         assert "..." in result
 
 
-
 class TestSearchCodebaseContentEdgeCases:
     """Search handles null bytes and special-only queries."""
 
     def test_content_with_null_byte(self, mock_model, mock_index):
         server.store[1] = {"path": "/a.py", "content": "x\x00y"}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("query")
         assert "\x00" in result or "x" in result
@@ -408,7 +398,6 @@ class TestSearchCodebaseContentEdgeCases:
     def test_query_with_only_special_chars(self, mock_model, mock_index, populated_state):
         result = server.search_codebase("!@#$%^&*()")
         assert isinstance(result, str)
-
 
 
 class TestSearchLargeKEmptyStore:
@@ -420,14 +409,14 @@ class TestSearchLargeKEmptyStore:
         assert "empty" in result.lower()
 
 
-
 class TestSearchCodebaseKFloat:
     """search_codebase with float k values."""
 
     def test_k_float_clamps_to_int(self, mock_model, mock_index):
         server.store[1] = {"path": "/a.py", "content": "x"}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("query", k=2.7)
         assert isinstance(result, str)
@@ -435,11 +424,11 @@ class TestSearchCodebaseKFloat:
     def test_k_float_string_clamps_to_one(self, mock_model, mock_index):
         server.store[1] = {"path": "/a.py", "content": "x"}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("query", k="bad")
         assert isinstance(result, str)
-
 
 
 class TestSearchKBooleanTrue:
@@ -448,11 +437,11 @@ class TestSearchKBooleanTrue:
     def test_k_true_returns_results(self, mock_model, mock_index):
         server.store[1] = {"path": "/a.py", "content": "x"}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("query", k=True)
         assert isinstance(result, str)
-
 
 
 class TestSearchKListValue:
@@ -461,11 +450,11 @@ class TestSearchKListValue:
     def test_k_list_clamps_to_one(self, mock_model, mock_index):
         server.store[1] = {"path": "/a.py", "content": "x"}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("query", k=[1, 2, 3])
         assert isinstance(result, str)
-
 
 
 class TestSearchCodebaseNewlinesInContent:
@@ -475,12 +464,12 @@ class TestSearchCodebaseNewlinesInContent:
         content = "def foo():\n    return 42\n"
         server.store[1] = {"path": "/a.py", "content": content}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("query")
         assert "def foo():" in result
         assert "    return 42" in result
-
 
 
 class TestSearchCodebaseResultOrdering:
@@ -499,7 +488,6 @@ class TestSearchCodebaseResultOrdering:
         assert high_idx < low_idx
 
 
-
 class TestSearchCodebaseStoreEmptyMessage:
     """search_codebase returns correct message when store is empty."""
 
@@ -509,7 +497,6 @@ class TestSearchCodebaseStoreEmptyMessage:
         assert "index_directory" in result
 
 
-
 class TestSearchCodebaseContentDisplayTrailingNewlines:
     """search_codebase display of content with trailing newlines."""
 
@@ -517,12 +504,12 @@ class TestSearchCodebaseContentDisplayTrailingNewlines:
         content = "x = 1\n\ny = 2\n"
         server.store[1] = {"path": "/a.py", "content": content}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("query")
         assert "x = 1" in result
         assert "y = 2" in result
-
 
 
 class TestSearchCodebaseNonStringContent:
@@ -547,7 +534,6 @@ class TestSearchCodebaseNonStringContent:
         assert "/a.py" in result  # None content renders as empty string, no crash
 
 
-
 class TestSearchCodebaseMismatchedScoresIds:
     """search_codebase tolerates mismatched scores/ids array lengths."""
 
@@ -559,7 +545,6 @@ class TestSearchCodebaseMismatchedScoresIds:
         )
         result = server.search_codebase("query", k=5)
         assert "/a.py" in result
-
 
 
 class TestSearchCodebaseContentTruncation:
@@ -577,7 +562,6 @@ class TestSearchCodebaseContentTruncation:
         assert "x" * 500 in result
 
 
-
 class TestSearchEdgeCases:
     """Additional search_codebase edge cases."""
 
@@ -588,17 +572,17 @@ class TestSearchEdgeCases:
     def test_k_is_complex_number_clamps(self, mock_model, mock_index):
         server.store[1] = {"path": "/a.py", "content": "x"}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
-        result = server.search_codebase("query", k=1+2j)
+        result = server.search_codebase("query", k=1 + 2j)
         assert isinstance(result, str)
 
     def test_k_is_numpy_uint64(self, mock_model, mock_index):
         server.store[1] = {"path": "/a.py", "content": "x"}
         mock_index.search.return_value = (
-            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+            np.array([[0.95]]),
+            np.array([[1]], dtype=np.uint64),
         )
         result = server.search_codebase("query", k=np.uint64(3))
         assert isinstance(result, str)
-
-

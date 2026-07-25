@@ -1,20 +1,16 @@
 """
 Auto-generated test file for persistence.
 """
-import builtins
+
+import contextlib
 import json
 import os
-import time
 import threading
-import signal as sig_module
-from collections import deque
+import time
 
-import numpy as np
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
 
 import server
-
 
 
 class TestAtomicPersistence:
@@ -44,16 +40,13 @@ class TestAtomicPersistence:
         assert os.path.exists(server.STORE_PATH)
 
         with open(server.META_PATH) as f:
-
             meta_loaded = json.load(f)
         assert "/proj/file1.py" in meta_loaded
 
         with open(server.STORE_PATH) as f:
-
             store_loaded = json.load(f)
         assert "1" in store_loaded
         assert store_loaded["1"]["path"] == "/proj/file1.py"
-
 
 
 class TestPersistenceRobustness:
@@ -71,22 +64,19 @@ class TestPersistenceRobustness:
         mock_index.write.side_effect = lambda p: open(p, "w").close()
         server.persist_all()
 
-        mtime_before = os.path.getmtime(server.META_PATH)
+        os.path.getmtime(server.META_PATH)
         with open(server.META_PATH) as f:
             content_before = f.read()
 
         mock_write = mocker.patch.object(server, "atomic_write")
         mock_write.side_effect = [None, Exception("crash during store write")]
 
-        try:
+        with contextlib.suppress(Exception):
             server.persist_all()
-        except Exception:
-            pass
 
         assert os.path.exists(server.META_PATH)
         with open(server.META_PATH) as f:
             assert f.read() == content_before
-
 
 
 class TestAtomicWriteEdgeCases:
@@ -114,11 +104,10 @@ class TestPersistAllEdgeCases:
         assert any("Cannot create" in str(call) for call in mock_log.call_args_list)
 
 
-
 class TestPersistAllPartialFailure:
     def test_index_write_succeeds_replace_fails(self, mocker, mock_index, populated_state):
         server.index = mock_index
-        mock_replace = mocker.patch("os.replace", side_effect=OSError("cross-device"))
+        mocker.patch("os.replace", side_effect=OSError("cross-device"))
         server.persist_all()
         assert not os.path.exists(server.INDEX_PATH)  # .tmp might exist but index not in place
 
@@ -150,7 +139,6 @@ class TestPersistAllPartialFailure:
         server.persist_all()
         assert os.path.exists(server.INDEX_PATH)
         assert os.path.exists(server.META_PATH)
-
 
 
 class TestAtomicWriteFailures:
@@ -191,7 +179,6 @@ class TestAtomicWriteFailures:
         assert not os.path.exists(str(f) + ".tmp")
 
 
-
 class TestPersistAllWriteFailure:
     """Atomic write failure during persist_all — verify no corruption."""
 
@@ -218,7 +205,6 @@ class TestPersistAllWriteFailure:
         assert os.path.exists(server.META_PATH)
 
 
-
 class TestPersistAllAfterMakedirsFailure:
     """persist_all handles makedirs failure gracefully."""
 
@@ -234,7 +220,6 @@ class TestPersistAllAfterMakedirsFailure:
         assert not os.path.exists(server.INDEX_PATH)
         assert not os.path.exists(server.META_PATH)
         assert not os.path.exists(server.STORE_PATH)
-
 
 
 class TestWorkerStatePersistsAfterError:
@@ -276,7 +261,6 @@ class TestWorkerStatePersistsAfterError:
         assert server.worker_state["last_error"] is not None
 
 
-
 class TestPersistAllNoTempFiles:
     """No .tmp files left behind after persist_all completes."""
 
@@ -299,7 +283,6 @@ class TestPersistAllNoTempFiles:
         mocker.patch.object(server, "atomic_write", side_effect=RuntimeError("write fails"))
         server.persist_all()
         assert not os.path.exists(server.INDEX_PATH + ".tmp")
-
 
 
 class TestBackgroundWorkerPersistFailure:
@@ -341,7 +324,6 @@ class TestBackgroundWorkerPersistFailure:
         assert "persist boom" in server.worker_state["last_error"]
 
 
-
 class TestAtomicWriteEdgeCasesMore:
     """Additional atomic_write edge cases."""
 
@@ -353,12 +335,9 @@ class TestAtomicWriteEdgeCasesMore:
     def test_atomic_write_cleanup_on_failure(self, mocker, tmp_path):
         target = tmp_path / "test.txt"
         mocker.patch("builtins.open", side_effect=PermissionError("denied"))
-        try:
+        with contextlib.suppress(PermissionError):
             server.atomic_write(str(target), "data")
-        except PermissionError:
-            pass
         assert not os.path.exists(str(target) + ".tmp")
-
 
 
 class TestBackgroundWorkerHandlesPersistException:
@@ -371,11 +350,13 @@ class TestBackgroundWorkerHandlesPersistException:
         mock_index.add_with_ids.return_value = None
         call_count = [0]
         original_persist = server.persist_all
+
         def flaky_persist():
             call_count[0] += 1
             if call_count[0] == 1:
                 raise RuntimeError("first persist fails")
             return original_persist()
+
         mocker.patch.object(server, "persist_all", side_effect=flaky_persist)
         f = tmp_path / "f.py"
         f.write_text("x")
@@ -417,7 +398,6 @@ class TestBackgroundWorkerHandlesPersistException:
         assert server.worker_state["errors"] == 1
 
 
-
 class TestBackgroundWorkerPersistDoesNotCrashOnWarning:
     """Worker handles persist_all returning normally with warnings."""
 
@@ -426,9 +406,11 @@ class TestBackgroundWorkerPersistDoesNotCrashOnWarning:
         mock_index.write.side_effect = lambda p: open(p, "w").close()
         mock_index.add_with_ids.side_effect = None
         mock_index.add_with_ids.return_value = None
+
         # persist_all logs warning but doesn't raise
         def warn_persist():
             pass
+
         mocker.patch.object(server, "persist_all", side_effect=warn_persist)
         f = tmp_path / "f.py"
         f.write_text("x")
@@ -441,7 +423,6 @@ class TestBackgroundWorkerPersistDoesNotCrashOnWarning:
         server._stop_event.set()
         assert server.worker_state["processed"] == 1
         assert server.worker_state["errors"] == 0
-
 
 
 class TestPersistContinueOnIndexFail:
@@ -469,7 +450,6 @@ class TestPersistContinueOnIndexFail:
         assert not os.path.exists(server.INDEX_PATH)
 
 
-
 class TestPersistAllStoreEdgeCases:
     """persist_all handles non-serializable store entries."""
 
@@ -491,7 +471,6 @@ class TestPersistAllStoreEdgeCases:
         assert stored["1"]["content"] is None
 
 
-
 class TestAtomicWriteParentIsFile:
     """atomic_write handles parent path being a file (not directory)."""
 
@@ -499,9 +478,8 @@ class TestAtomicWriteParentIsFile:
         f = tmp_path / "file.txt"
         f.write_text("parent")
         child = f / "child.json"
-        with pytest.raises(Exception):
+        with pytest.raises((PermissionError, OSError, IsADirectoryError, FileNotFoundError)):
             server.atomic_write(str(child), "{}")
-
 
 
 class TestPersistAllNoIndexThenIndexCreated:
@@ -512,7 +490,6 @@ class TestPersistAllNoIndexThenIndexCreated:
         server.meta["/a.py"] = {"id": 1}
         server.persist_all()
         assert not os.path.exists(server.META_PATH)
-
 
 
 class TestPersistAllEmptyState:
@@ -532,7 +509,6 @@ class TestPersistAllEmptyState:
         assert os.path.exists(server.INDEX_PATH)
         assert os.path.exists(server.META_PATH)
         assert os.path.exists(server.STORE_PATH)
-
 
 
 class TestBackgroundWorkerPersistCalled:
@@ -556,7 +532,6 @@ class TestBackgroundWorkerPersistCalled:
         mock_persist.assert_called()
 
 
-
 class TestAtomicWriteUnicodeContent:
     """atomic_write handles unicode content correctly."""
 
@@ -565,7 +540,6 @@ class TestAtomicWriteUnicodeContent:
         data = '{"café": "über cool 🎉"}'
         server.atomic_write(str(f), data)
         assert json.loads(f.read_text(encoding="utf-8")) == {"café": "über cool 🎉"}
-
 
 
 class TestPersistLockedEdgeCases:
@@ -591,7 +565,6 @@ class TestPersistLockedEdgeCases:
         assert os.path.exists(server.STORE_PATH)
 
 
-
 class TestPersistLockedMetaAndStoreBothFail:
     """_persist_locked handles simultaneous meta and store failures."""
 
@@ -602,7 +575,6 @@ class TestPersistLockedMetaAndStoreBothFail:
         server._persist_locked()
 
 
-
 class TestPersistAllIndexNone:
     """persist_all with index=None after makedirs failure."""
 
@@ -610,7 +582,6 @@ class TestPersistAllIndexNone:
         server.index = None
         mocker.patch("os.makedirs", side_effect=PermissionError("denied"))
         server.persist_all()
-
 
 
 class TestBackgroundWorkerStaleReindexPersistFailure:
@@ -636,18 +607,17 @@ class TestBackgroundWorkerStaleReindexPersistFailure:
         assert server.worker_state["errors"] >= 1
 
 
-
 class TestPersistLockedBaseException:
     """_persist_locked handles BaseException from index.write."""
 
     def test_index_write_base_exception_propagates(self, mock_index):
         class CustomBase(BaseException):
             pass
+
         mock_index.write.side_effect = CustomBase("fatal")
         server.meta["/a.py"] = {"id": 1, "mtime": 0, "size": 0, "last_indexed": 0}
         with pytest.raises(CustomBase, match="fatal"):
             server._persist_locked()
-
 
 
 class TestPersistLockedIndexWriteReplaceFails:
@@ -657,11 +627,13 @@ class TestPersistLockedIndexWriteReplaceFails:
         mock_index.write.side_effect = lambda p: open(p, "w").close()
         calls = []
         real_replace = os.replace
+
         def flaky_replace(src, dst):
             calls.append((src, dst))
-            if server.INDEX_PATH + ".tmp" == src:
+            if src == server.INDEX_PATH + ".tmp":
                 raise OSError("cross-device link")
             return real_replace(src, dst)
+
         mocker.patch("os.replace", side_effect=flaky_replace)
         server._persist_locked()
         assert os.path.exists(server.META_PATH)
@@ -670,12 +642,13 @@ class TestPersistLockedIndexWriteReplaceFails:
     def test_replace_and_atomic_write_both_fail(self, mock_index, populated_state, mocker):
         mock_index.write.side_effect = lambda p: open(p, "w").close()
         mock_replace = mocker.patch("os.replace")
+
         def all_flaky(src, dst):
             raise OSError("all fail")
+
         mock_replace.side_effect = all_flaky
         mocker.patch("server.atomic_write", side_effect=RuntimeError("meta fail"))
         server._persist_locked()
-
 
 
 class TestAtomicWriteDoubleFailure:
@@ -691,7 +664,6 @@ class TestAtomicWriteDoubleFailure:
         mock_remove.assert_called_once_with(str(target) + ".tmp")
 
 
-
 class TestBackgroundWorkerPersistBaseException:
     """BaseException from persist_all propagates through worker (not caught by except Exception)."""
 
@@ -699,8 +671,10 @@ class TestBackgroundWorkerPersistBaseException:
         mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
         mock_index.write.side_effect = lambda p: open(p, "w").close()
         mock_index.add_with_ids.return_value = None
+
         class CustomBase(BaseException):
             pass
+
         mocker.patch.object(server, "persist_all", side_effect=CustomBase("fatal"))
         f = tmp_path / "f.py"
         f.write_text("x = 1")
@@ -711,7 +685,6 @@ class TestBackgroundWorkerPersistBaseException:
         t.start()
         time.sleep(0.1)
         assert not t.is_alive()
-
 
 
 class TestBackgroundWorkerNoStaleLoopWithoutPersist:
@@ -729,18 +702,19 @@ class TestBackgroundWorkerNoStaleLoopWithoutPersist:
         mocker.patch.object(server, "persist_all", side_effect=RuntimeError("persist fail"))
         iter_count = [0]
         original_sleep = time.sleep
+
         def tracking_sleep(s):
             iter_count[0] += 1
             if iter_count[0] >= 6:
                 server._stop_event.set()
             original_sleep(min(s, 0.02))
+
         mocker.patch.object(time, "sleep", side_effect=tracking_sleep)
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
         t.join(timeout=5)
         assert iter_count[0] < 20
-
 
 
 class TestWorkerStateLastErrorPersistence:
@@ -764,7 +738,6 @@ class TestWorkerStateLastErrorPersistence:
         assert server.worker_state["last_error"] == "previous error"
 
 
-
 class TestPersistAllNonSerializableMeta:
     """persist_all serializes non-serializable meta values using default=str."""
 
@@ -784,18 +757,19 @@ class TestPersistAllNonSerializableMeta:
         assert os.path.exists(server.META_PATH)
 
 
-
 class TestConcurrentPersistAll:
     """persist_all is safe when called concurrently from two threads."""
 
     def test_concurrent_persist_all(self, mock_index, tmp_path, populated_state):
         mock_index.write.side_effect = lambda p: open(p, "w").close()
         errors = []
+
         def do_persist():
             try:
                 server.persist_all()
             except Exception as e:
                 errors.append(e)
+
         t1 = threading.Thread(target=do_persist)
         t2 = threading.Thread(target=do_persist)
         t1.start()
@@ -806,5 +780,3 @@ class TestConcurrentPersistAll:
         assert os.path.exists(server.INDEX_PATH)
         assert os.path.exists(server.META_PATH)
         assert os.path.exists(server.STORE_PATH)
-
-

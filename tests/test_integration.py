@@ -60,33 +60,42 @@ def mcp_server():
 
 class TestMCPProtocol:
     def test_initialize_handshake(self, mcp_server):
-        _send(mcp_server.stdin, {
-            "jsonrpc": "2.0",
-            "id": _next_id(),
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "turbocode-test", "version": "1.0"},
+        _send(
+            mcp_server.stdin,
+            {
+                "jsonrpc": "2.0",
+                "id": _next_id(),
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "turbocode-test", "version": "1.0"},
+                },
             },
-        })
+        )
         resp = _recv(mcp_server.stdout)
         assert resp["jsonrpc"] == "2.0"
         assert "result" in resp
         assert resp["result"]["serverInfo"]["name"] == "TurboCode MCP"
 
     def test_initialized_notification(self, mcp_server):
-        _send(mcp_server.stdin, {
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized",
-        })
+        _send(
+            mcp_server.stdin,
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+            },
+        )
 
     def test_tools_list(self, mcp_server):
-        _send(mcp_server.stdin, {
-            "jsonrpc": "2.0",
-            "id": _next_id(),
-            "method": "tools/list",
-        })
+        _send(
+            mcp_server.stdin,
+            {
+                "jsonrpc": "2.0",
+                "id": _next_id(),
+                "method": "tools/list",
+            },
+        )
         resp = _recv(mcp_server.stdout)
         assert resp["jsonrpc"] == "2.0"
         tools = resp["result"]["tools"]
@@ -96,12 +105,15 @@ class TestMCPProtocol:
         assert "get_index_stats" in names
 
     def test_get_index_stats_tool(self, mcp_server):
-        _send(mcp_server.stdin, {
-            "jsonrpc": "2.0",
-            "id": _next_id(),
-            "method": "tools/call",
-            "params": {"name": "get_index_stats", "arguments": {}},
-        })
+        _send(
+            mcp_server.stdin,
+            {
+                "jsonrpc": "2.0",
+                "id": _next_id(),
+                "method": "tools/call",
+                "params": {"name": "get_index_stats", "arguments": {}},
+            },
+        )
         resp = _recv(mcp_server.stdout)
         assert resp["jsonrpc"] == "2.0"
         content = resp["result"]["content"][0]["text"]
@@ -109,26 +121,30 @@ class TestMCPProtocol:
         assert "Vectors:" in content
 
     def test_index_directory_tool_not_found(self, mcp_server):
-        nonexistent = os.path.join(
-            os.sep, uuid.uuid4().hex[:16]
+        nonexistent = os.path.join(os.sep, uuid.uuid4().hex[:16])
+        _send(
+            mcp_server.stdin,
+            {
+                "jsonrpc": "2.0",
+                "id": _next_id(),
+                "method": "tools/call",
+                "params": {"name": "index_directory", "arguments": {"directory_path": nonexistent}},
+            },
         )
-        _send(mcp_server.stdin, {
-            "jsonrpc": "2.0",
-            "id": _next_id(),
-            "method": "tools/call",
-            "params": {"name": "index_directory", "arguments": {"directory_path": nonexistent}},
-        })
         resp = _recv(mcp_server.stdout)
         assert resp["jsonrpc"] == "2.0"
         content = resp["result"]["content"][0]["text"]
         assert "not found" in content.lower()
 
     def test_resources_list(self, mcp_server):
-        _send(mcp_server.stdin, {
-            "jsonrpc": "2.0",
-            "id": _next_id(),
-            "method": "resources/list",
-        })
+        _send(
+            mcp_server.stdin,
+            {
+                "jsonrpc": "2.0",
+                "id": _next_id(),
+                "method": "resources/list",
+            },
+        )
         resp = _recv(mcp_server.stdout)
         assert resp["jsonrpc"] == "2.0"
         resources = resp["result"]["resources"]
@@ -137,24 +153,30 @@ class TestMCPProtocol:
         assert "turbocode://stats" in uris
 
     def test_resource_status(self, mcp_server):
-        _send(mcp_server.stdin, {
-            "jsonrpc": "2.0",
-            "id": _next_id(),
-            "method": "resources/read",
-            "params": {"uri": "turbocode://status"},
-        })
+        _send(
+            mcp_server.stdin,
+            {
+                "jsonrpc": "2.0",
+                "id": _next_id(),
+                "method": "resources/read",
+                "params": {"uri": "turbocode://status"},
+            },
+        )
         resp = _recv(mcp_server.stdout)
         assert resp["jsonrpc"] == "2.0"
         content = resp["result"]["contents"][0]["text"]
         assert "Ready" in content or "Idle" in content
 
     def test_resource_stats(self, mcp_server):
-        _send(mcp_server.stdin, {
-            "jsonrpc": "2.0",
-            "id": _next_id(),
-            "method": "resources/read",
-            "params": {"uri": "turbocode://stats"},
-        })
+        _send(
+            mcp_server.stdin,
+            {
+                "jsonrpc": "2.0",
+                "id": _next_id(),
+                "method": "resources/read",
+                "params": {"uri": "turbocode://stats"},
+            },
+        )
         resp = _recv(mcp_server.stdout)
         assert resp["jsonrpc"] == "2.0"
         stats = json.loads(resp["result"]["contents"][0]["text"])
@@ -163,12 +185,15 @@ class TestMCPProtocol:
         assert "model_loaded" in stats
 
     def test_search_empty_index(self, mcp_server):
-        _send(mcp_server.stdin, {
-            "jsonrpc": "2.0",
-            "id": _next_id(),
-            "method": "tools/call",
-            "params": {"name": "search_codebase", "arguments": {"query": "test"}},
-        })
+        _send(
+            mcp_server.stdin,
+            {
+                "jsonrpc": "2.0",
+                "id": _next_id(),
+                "method": "tools/call",
+                "params": {"name": "search_codebase", "arguments": {"query": "test"}},
+            },
+        )
         resp = _recv(mcp_server.stdout)
         assert resp["jsonrpc"] == "2.0"
         content = resp["result"]["content"][0]["text"]
@@ -176,12 +201,15 @@ class TestMCPProtocol:
         assert len(content) > 0
 
     def test_search_empty_query(self, mcp_server):
-        _send(mcp_server.stdin, {
-            "jsonrpc": "2.0",
-            "id": _next_id(),
-            "method": "tools/call",
-            "params": {"name": "search_codebase", "arguments": {"query": ""}},
-        })
+        _send(
+            mcp_server.stdin,
+            {
+                "jsonrpc": "2.0",
+                "id": _next_id(),
+                "method": "tools/call",
+                "params": {"name": "search_codebase", "arguments": {"query": ""}},
+            },
+        )
         resp = _recv(mcp_server.stdout)
         assert resp["jsonrpc"] == "2.0"
         content = resp["result"]["content"][0]["text"]
@@ -193,12 +221,15 @@ class TestMCPProtocol:
                 f.write("def hello(name):\n    return f'Hi {name}'\n")
             with open(os.path.join(d, "readme.md"), "w") as f:
                 f.write("# Test Project")
-            _send(mcp_server.stdin, {
-                "jsonrpc": "2.0",
-                "id": _next_id(),
-                "method": "tools/call",
-                "params": {"name": "index_directory", "arguments": {"directory_path": d}},
-            })
+            _send(
+                mcp_server.stdin,
+                {
+                    "jsonrpc": "2.0",
+                    "id": _next_id(),
+                    "method": "tools/call",
+                    "params": {"name": "index_directory", "arguments": {"directory_path": d}},
+                },
+            )
             resp = _recv(mcp_server.stdout)
             assert resp["jsonrpc"] == "2.0"
             content = resp["result"]["content"][0]["text"]
@@ -209,33 +240,44 @@ class TestMCPProtocol:
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "main.py"), "w", encoding="utf-8") as f:
                 f.write("def greet(name):\n    return f'Hello {name}'\n")
-            _send(mcp_server.stdin, {
-                "jsonrpc": "2.0",
-                "id": _next_id(),
-                "method": "tools/call",
-                "params": {"name": "index_directory", "arguments": {"directory_path": d}},
-            })
+            _send(
+                mcp_server.stdin,
+                {
+                    "jsonrpc": "2.0",
+                    "id": _next_id(),
+                    "method": "tools/call",
+                    "params": {"name": "index_directory", "arguments": {"directory_path": d}},
+                },
+            )
             resp = _recv(mcp_server.stdout, timeout=10)
             assert resp["result"]["content"][0]["text"].lower().startswith("queued")
 
-            import time; time.sleep(3)
-            _send(mcp_server.stdin, {
-                "jsonrpc": "2.0",
-                "id": _next_id(),
-                "method": "tools/call",
-                "params": {"name": "search_codebase", "arguments": {"query": "hello", "k": 3}},
-            })
+            import time
+
+            time.sleep(3)
+            _send(
+                mcp_server.stdin,
+                {
+                    "jsonrpc": "2.0",
+                    "id": _next_id(),
+                    "method": "tools/call",
+                    "params": {"name": "search_codebase", "arguments": {"query": "hello", "k": 3}},
+                },
+            )
             resp = _recv(mcp_server.stdout, timeout=30)
             assert resp["jsonrpc"] == "2.0"
             assert "result" in resp, f"Error: {resp.get('error', resp)}"
 
     def test_resource_status_after_index(self, mcp_server):
-        _send(mcp_server.stdin, {
-            "jsonrpc": "2.0",
-            "id": _next_id(),
-            "method": "resources/read",
-            "params": {"uri": "turbocode://status"},
-        })
+        _send(
+            mcp_server.stdin,
+            {
+                "jsonrpc": "2.0",
+                "id": _next_id(),
+                "method": "resources/read",
+                "params": {"uri": "turbocode://status"},
+            },
+        )
         resp = _recv(mcp_server.stdout)
         assert resp["jsonrpc"] == "2.0"
         assert isinstance(resp["result"]["contents"][0]["text"], str)

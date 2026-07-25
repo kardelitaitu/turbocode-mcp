@@ -7,15 +7,16 @@ Fully local, no cloud, no API keys.
 
 from __future__ import annotations
 
-import os
-import sys
+import contextlib
 import json
 import math
-import time
+import os
 import random
-import subprocess
 import signal as sig_module
+import subprocess
+import sys
 import threading
+import time
 from collections import deque
 
 import numpy as np
@@ -109,13 +110,9 @@ class _ModelClient:
         )
         if self._proc.poll() is not None:
             err = self._proc.stderr.read()
-            raise RuntimeError(
-                f"Embed subprocess exited immediately: {err.strip()}"
-            )
+            raise RuntimeError(f"Embed subprocess exited immediately: {err.strip()}")
         # Forward subprocess stderr to server log
-        self._stderr_thread = threading.Thread(
-            target=self._forward_stderr, daemon=True
-        )
+        self._stderr_thread = threading.Thread(target=self._forward_stderr, daemon=True)
         self._stderr_thread.start()
 
     def _forward_stderr(self) -> None:
@@ -145,19 +142,15 @@ class _ModelClient:
         with self._lock:
             if self._proc is not None:
                 try:
-                    self._proc.stdin.write(
-                        json.dumps({"type": "shutdown"}) + "\n"
-                    )
+                    self._proc.stdin.write(json.dumps({"type": "shutdown"}) + "\n")
                     self._proc.stdin.flush()
                 except Exception:
                     pass
                 try:
                     self._proc.wait(timeout=5)
                 except Exception:
-                    try:
+                    with contextlib.suppress(Exception):
                         self._proc.kill()
-                    except Exception:
-                        pass
                 self._proc = None
 
 
@@ -191,10 +184,8 @@ def ensure_index() -> None:
                 index = IdMapIndex.load(INDEX_PATH)
             except Exception as e:
                 log(f"WARNING: Failed to load index ({e}). Creating empty.")
-                try:
+                with contextlib.suppress(Exception):
                     os.remove(INDEX_PATH)
-                except Exception:
-                    pass
                 index = IdMapIndex(dim=384, bit_width=4)
         else:
             log("Creating new empty index.")
@@ -263,10 +254,8 @@ def atomic_write(path: str, data: str) -> None:
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             os.remove(tmp_path)
-        except Exception:
-            pass
         raise
 
 
@@ -351,8 +340,7 @@ def load_and_verify() -> None:
         return
 
     if meta_count != store_count:
-        log(f"WARNING: Inconsistency detected (meta={meta_count} vs store={store_count}). "
-            f"Rebuilding meta from store.")
+        log(f"WARNING: Inconsistency detected (meta={meta_count} vs store={store_count}). Rebuilding meta from store.")
         new_meta = {}
         for id_val, doc in store.items():
             if not isinstance(doc, dict):
@@ -434,10 +422,8 @@ def handle_remove(file_path: str) -> None:
         if file_id is None:
             del meta[file_path]
             return
-        try:
+        with contextlib.suppress(BaseException):
             index.remove(file_id)
-        except BaseException:
-            pass
         store.pop(file_id, None)
         del meta[file_path]
 
@@ -464,7 +450,7 @@ def handle_index(file_path: str) -> None:
         log(f"WARNING: Cannot stat {file_path} for file type check. Skipping.")
         return
     try:
-        with open(file_path, "r", encoding="utf-8-sig", errors="replace") as f:
+        with open(file_path, encoding="utf-8-sig", errors="replace") as f:
             content = f.read()
     except Exception:
         log(f"WARNING: Cannot read {file_path}. Skipping.")
@@ -478,9 +464,9 @@ def handle_index(file_path: str) -> None:
     embedding = model.encode([chunk])
     if embedding is None:
         return
-    if hasattr(embedding, 'ndim') and embedding.ndim == 0:
+    if hasattr(embedding, "ndim") and embedding.ndim == 0:
         return
-    if hasattr(embedding, '__len__') and len(embedding) == 0:
+    if hasattr(embedding, "__len__") and len(embedding) == 0:
         log(f"WARNING: Model returned empty embedding for {file_path}. Skipping.")
         return
 
@@ -512,17 +498,13 @@ def handle_index(file_path: str) -> None:
             }
             # Old vector removal after new add succeeded
             if old_id is not None:
-                try:
+                with contextlib.suppress(Exception):
                     index.remove(old_id)
-                except Exception:
-                    pass
         except Exception:
             log(f"ERROR: Failed to add {file_path} to index. Rolling back.")
             store.pop(file_id, None)
-            try:
+            with contextlib.suppress(Exception):
                 index.remove(file_id)
-            except Exception:
-                pass
             # Restore old entry to prevent data loss
             if old_id is not None:
                 meta[file_path] = old_entry
@@ -547,9 +529,7 @@ def find_stale_files(max_age_days: int = 7, max_files: int = 10) -> list[str]:
 
     with index_lock:
         candidates = [
-            path
-            for path, info in list(meta.items())
-            if isinstance(info, dict) and info.get("last_indexed", 0) < cutoff
+            path for path, info in list(meta.items()) if isinstance(info, dict) and info.get("last_indexed", 0) < cutoff
         ]
 
     if not candidates or safe_max == 0:
@@ -611,7 +591,7 @@ def background_worker() -> None:
                 worker_state["last_error"] = str(e)
 
         # Persist after each batch
-        debug(f"Batch complete. Persisting...")
+        debug("Batch complete. Persisting...")
         try:
             persist_all()
         except (KeyboardInterrupt, SystemExit):
@@ -647,9 +627,11 @@ def idle_watchdog() -> None:
                 persist_all()
             except Exception:
                 log("WARNING: Failed to persist state during idle shutdown.")
-            log(f"Idle for {IDLE_TIMEOUT // 60} minutes. "
+            log(
+                f"Idle for {IDLE_TIMEOUT // 60} minutes. "
                 f"Shutting down to free resources. "
-                f"Will restart automatically when needed.")
+                f"Will restart automatically when needed."
+            )
             os._exit(0)
 
 
@@ -671,7 +653,7 @@ def _load_gitignore_specs(root: str) -> list[tuple[str, pathspec.PathSpec]]:
         gi = os.path.join(current, ".gitignore")
         if os.path.isfile(gi):
             try:
-                with open(gi, "r") as f:
+                with open(gi) as f:
                     spec = pathspec.PathSpec.from_lines("gitignore", f)
                 specs.append((current, spec))
             except Exception:
@@ -716,7 +698,7 @@ def index_directory(directory_path: str, respect_gitignore: bool = True) -> str:
     changed_files: list[str] = []
     removed_files: list[str] = []
 
-    SUPPORTED_EXT = (".py", ".rs", ".md", ".txt")
+    supported_ext = (".py", ".rs", ".md", ".txt")
 
     # Snapshot meta once to avoid O(n) lock acquisitions during walk
     with index_lock:
@@ -729,7 +711,7 @@ def index_directory(directory_path: str, respect_gitignore: bool = True) -> str:
     try:
         for root, _, files in os.walk(directory_path, followlinks=False):
             for f in files:
-                if not f.lower().endswith(SUPPORTED_EXT):
+                if not f.lower().endswith(supported_ext):
                     continue
                 fp = os.path.normpath(os.path.join(root, f))
                 if respect_gitignore and _is_gitignored(fp, gitignore_specs):
@@ -738,11 +720,7 @@ def index_directory(directory_path: str, respect_gitignore: bool = True) -> str:
 
                 tracked_info = meta_snapshot.get(fp)
                 tracked = tracked_info is not None
-                tracked_mtime = (
-                    tracked_info.get("mtime", 0)
-                    if isinstance(tracked_info, dict)
-                    else None
-                )
+                tracked_mtime = tracked_info.get("mtime", 0) if isinstance(tracked_info, dict) else None
 
                 if not tracked:
                     new_files.append(fp)
@@ -763,7 +741,8 @@ def index_directory(directory_path: str, respect_gitignore: bool = True) -> str:
     separator = os.sep
     with index_lock:
         removed_files = [
-            p for p in list(meta.keys())
+            p
+            for p in list(meta.keys())
             if os.path.normpath(p).startswith(norm_dir + separator) and not os.path.exists(p)
         ]
 
@@ -820,7 +799,7 @@ def search_codebase(query: str, k: int = 3) -> str:
         scores, ids = index.search(query_vec, k=k)
 
     results: list[str] = []
-    for score, doc_id in zip(scores[0], ids[0]):
+    for score, doc_id in zip(scores[0], ids[0], strict=False):
         with index_lock:
             doc = store.get(int(doc_id))
         if doc and isinstance(doc, dict):
@@ -830,10 +809,7 @@ def search_codebase(query: str, k: int = 3) -> str:
                 content = str(content) if content is not None else ""
             display = content[:500]
             suffix = "..." if len(content) > 500 else ""
-            results.append(
-                f"**{file_path}** (score: {score:.4f})\n"
-                f"```\n{display}{suffix}\n```"
-            )
+            results.append(f"**{file_path}** (score: {score:.4f})\n```\n{display}{suffix}\n```")
 
     if not results:
         remaining = queue_depth()
@@ -892,7 +868,7 @@ def index_workspace(directory_path: str) -> str:
 
     ensure_resources()
 
-    SUPPORTED_EXT = (".py", ".rs", ".js", ".ts", ".md")
+    supported_ext = (".py", ".rs", ".js", ".ts", ".md")
 
     new_files: list[str] = []
     changed_files: list[str] = []
@@ -903,16 +879,12 @@ def index_workspace(directory_path: str) -> str:
     try:
         for root, _, files in os.walk(directory_path, followlinks=False):
             for f in files:
-                if not f.lower().endswith(SUPPORTED_EXT):
+                if not f.lower().endswith(supported_ext):
                     continue
                 fp = os.path.normpath(os.path.join(root, f))
                 tracked_info = meta_snapshot.get(fp)
                 tracked = tracked_info is not None
-                tracked_mtime = (
-                    tracked_info.get("mtime", 0)
-                    if isinstance(tracked_info, dict)
-                    else None
-                )
+                tracked_mtime = tracked_info.get("mtime", 0) if isinstance(tracked_info, dict) else None
                 if not tracked:
                     new_files.append(fp)
                 else:
@@ -931,7 +903,8 @@ def index_workspace(directory_path: str) -> str:
     separator = os.sep
     with index_lock:
         removed_files = [
-            p for p in list(meta.keys())
+            p
+            for p in list(meta.keys())
             if os.path.normpath(p).startswith(norm_dir + separator) and not os.path.exists(p)
         ]
 
@@ -1015,10 +988,8 @@ def drop_index() -> str:
         meta.clear()
         store.clear()
         if index is not None:
-            try:
+            with contextlib.suppress(Exception):
                 index.reset()
-            except Exception:
-                pass
         current_id = 1
 
     persist_all()
@@ -1053,7 +1024,7 @@ def semantic_search(query: str, top_k: int = 5) -> str:
         scores, ids = index.search(query_vec, k=top_k)
 
     results: list[str] = []
-    for score, doc_id in zip(scores[0], ids[0]):
+    for score, doc_id in zip(scores[0], ids[0], strict=False):
         with index_lock:
             doc = store.get(int(doc_id))
         if doc and isinstance(doc, dict):
@@ -1063,10 +1034,7 @@ def semantic_search(query: str, top_k: int = 5) -> str:
                 content = str(content) if content is not None else ""
             display = content[:500]
             suffix = "..." if len(content) > 500 else ""
-            results.append(
-                f"**{file_path}** (score: {score:.4f})\n"
-                f"```\n{display}{suffix}\n```"
-            )
+            results.append(f"**{file_path}** (score: {score:.4f})\n```\n{display}{suffix}\n```")
 
     if not results:
         remaining = queue_depth()
@@ -1090,7 +1058,7 @@ def keyword_search(keyword: str, file_extension_filter: str = "") -> str:
 
         matches: list[tuple[str, str, int]] = []
         ext_filter = file_extension_filter.strip().lower()
-        for doc_id, doc in store.items():
+        for _doc_id, doc in store.items():
             if not isinstance(doc, dict):
                 continue
             file_path = doc.get("path", "")
@@ -1108,8 +1076,8 @@ def keyword_search(keyword: str, file_extension_filter: str = "") -> str:
         if not matches:
             return f"No matches for '{keyword}'."
 
-        MAX_RESULTS = 30
-        shown = matches[:MAX_RESULTS]
+        max_results = 30
+        shown = matches[:max_results]
         result = f"Found {len(matches)} matches for '{keyword}'"
         if ext_filter:
             result += f" in *{ext_filter} files"
@@ -1118,8 +1086,8 @@ def keyword_search(keyword: str, file_extension_filter: str = "") -> str:
         for file_path, line, line_num in shown:
             result += f"**{file_path}** (line {line_num})\n  `{line[:200]}`\n\n"
 
-        if len(matches) > MAX_RESULTS:
-            result += f"... and {len(matches) - MAX_RESULTS} more matches."
+        if len(matches) > max_results:
+            result += f"... and {len(matches) - max_results} more matches."
 
         return result
 
@@ -1138,7 +1106,7 @@ def read_file_content(file_path: str) -> str:
         return f"Error: Cannot access '{file_path}': {e}"
 
     try:
-        with open(file_path, "r", encoding="utf-8-sig", errors="replace") as f:
+        with open(file_path, encoding="utf-8-sig", errors="replace") as f:
             content = f.read()
     except Exception as e:
         return f"Error: Cannot read '{file_path}': {e}"
@@ -1255,18 +1223,14 @@ def main() -> None:
     debug(f"INDEX_PATH={INDEX_PATH}")
     debug(f"meta count={len(meta)}, store count={len(store)}")
 
-    log(f"Ready. {len(meta)} files tracked. "
-        f"Model/index loaded on demand. "
-        f"Idle timeout: {IDLE_TIMEOUT // 60}m.")
+    log(f"Ready. {len(meta)} files tracked. Model/index loaded on demand. Idle timeout: {IDLE_TIMEOUT // 60}m.")
 
     # Handle graceful shutdown signals
     def handle_signal(signum, frame):
         log(f"Received signal {signum}. Persisting and shutting down...")
         if model is not None and isinstance(model, _ModelClient):
-            try:
+            with contextlib.suppress(Exception):
                 model.stop()
-            except Exception:
-                pass
         if index_lock.acquire(timeout=5):
             try:
                 _persist_locked()

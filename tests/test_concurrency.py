@@ -1,20 +1,17 @@
 """
 Auto-generated test file for concurrency.
 """
-import builtins
-import json
+
+import contextlib
 import os
-import time
-import threading
 import signal as sig_module
-from collections import deque
+import threading
+import time
 
 import numpy as np
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
 
 import server
-
 
 
 class TestBackgroundWorker:
@@ -25,8 +22,9 @@ class TestBackgroundWorker:
         f.write_text("def foo():\n    return 42\n")
         server.enqueue("new", str(f))
 
-        from server import background_worker
         import threading
+
+        from server import background_worker
 
         server._stop_event.clear()
         t = threading.Thread(target=background_worker, daemon=True)
@@ -41,8 +39,9 @@ class TestBackgroundWorker:
         mock_index.write.side_effect = lambda p: open(p, "w").close()
         server.enqueue("new", "/nonexistent/file.py")
 
-        from server import background_worker
         import threading
+
+        from server import background_worker
 
         server._stop_event.clear()
         t = threading.Thread(target=background_worker, daemon=True)
@@ -51,7 +50,6 @@ class TestBackgroundWorker:
 
         assert server.worker_state["errors"] == 0
         assert "/nonexistent/file.py" not in server.meta
-
 
 
 class TestIdleWatchdog:
@@ -99,7 +97,6 @@ class TestIdleWatchdog:
         t.join(timeout=1)
 
 
-
 class TestSignalHandling:
     def test_main_registers_signal_handlers(self, mocker):
         mock_signal = mocker.patch("server.sig_module.signal")
@@ -130,20 +127,17 @@ class TestSignalHandling:
         def capture_signal(signum, handler):
             registered_handlers[signum] = handler
 
-        mock_signal = mocker.patch("server.sig_module.signal", side_effect=capture_signal)
+        mocker.patch("server.sig_module.signal", side_effect=capture_signal)
         mocker.patch("server.mcp.run", side_effect=Exception("stop"))
 
-        try:
+        with contextlib.suppress(Exception):
             server.main()
-        except Exception:
-            pass
 
         handler = registered_handlers.get(sig_module.SIGINT)
         if handler:
             handler(sig_module.SIGINT, None)
             mock_persist_locked.assert_called_once()
             mock_exit.assert_called_once_with(0)
-
 
 
 class TestBackgroundWorkerRobustness:
@@ -179,7 +173,6 @@ class TestBackgroundWorkerRobustness:
         assert server.worker_state["errors"] == 1
 
 
-
 class TestThreadSafety:
     def test_concurrent_enqueue_from_multiple_threads(self):
         def enqueuer(n):
@@ -211,7 +204,6 @@ class TestThreadSafety:
         assert 0 <= server.queue_depth() <= 50, f"Expected ≤50 got {server.queue_depth()}"
 
 
-
 class TestTouchThreadSafety:
     def test_concurrent_touch(self):
         def touch_many(n):
@@ -224,7 +216,6 @@ class TestTouchThreadSafety:
         for t in ts:
             t.join()
         assert abs(time.time() - server.last_activity) < 1.0
-
 
 
 class TestWorkerStopEvent:
@@ -248,7 +239,8 @@ class TestWorkerStopEvent:
         mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
         mock_index.write.side_effect = lambda p: open(p, "w").close()
         mock_index.search.return_value = (
-            np.array([[]]), np.array([[]], dtype=np.uint64),
+            np.array([[]]),
+            np.array([[]], dtype=np.uint64),
         )
         mock_index.contains.return_value = False
         old_file = tmp_path / "old.py"
@@ -262,7 +254,6 @@ class TestWorkerStopEvent:
         t.start()
         time.sleep(0.02)
         assert server.worker_state["processed"] >= 1
-
 
 
 class TestWorkerStatusTransitions:
@@ -299,7 +290,6 @@ class TestWorkerStatusTransitions:
         assert server.worker_state["status"] == "idle"
 
 
-
 class TestEnsureModelThreadSafety:
     def test_concurrent_ensure_model_loads_once(self, mocker):
         start_ctr = [0]
@@ -309,7 +299,7 @@ class TestEnsureModelThreadSafety:
             time.sleep(0.05)
             self._proc = None
 
-        mocker.patch.object(server._ModelClient, '_start', slow_start)
+        mocker.patch.object(server._ModelClient, "_start", slow_start)
         server.model = None
 
         def load():
@@ -327,7 +317,6 @@ class TestEnsureModelThreadSafety:
         server.model = object()
         server.ensure_model()
         # ensure_model returns immediately since model is already set
-
 
 
 class TestBackgroundWorkerEdgeCases:
@@ -354,7 +343,6 @@ class TestBackgroundWorkerEdgeCases:
         assert not t.is_alive()
 
 
-
 class TestIdleWatchdogTimeout:
     def test_idle_watchdog_exits_after_timeout(self, mocker):
         mocker.patch.object(server, "CHECK_INTERVAL", 0.01)
@@ -374,14 +362,13 @@ class TestIdleWatchdogTimeout:
         mocker.patch.object(server, "IDLE_TIMEOUT", -1)
         mocker.patch("server.persist_all", side_effect=RuntimeError("persist fail"))
         mock_log = mocker.patch("server.log")
-        mock_exit = mocker.patch("server.os._exit")
+        mocker.patch("server.os._exit")
         server._stop_event.clear()
         t = threading.Thread(target=server.idle_watchdog, daemon=True)
         t.start()
         time.sleep(0.02)
         server._stop_event.set()
         assert any("persist" in str(c).lower() for c in mock_log.call_args_list)
-
 
 
 class TestBackgroundWorkerMixedBatch:
@@ -408,7 +395,6 @@ class TestBackgroundWorkerMixedBatch:
         assert str(f) in server.meta
         new_id = server.meta[str(f)]["id"]
         assert new_id != old_id
-
 
 
 class TestBackgroundWorkerImmediateStop:
@@ -438,7 +424,6 @@ class TestBackgroundWorkerImmediateStop:
         assert not t.is_alive()
 
 
-
 class TestConcurrentTouch:
     """Concurrent touch calls are safe."""
 
@@ -458,7 +443,6 @@ class TestConcurrentTouch:
         server.last_activity = 0
         server.touch()
         assert server.last_activity > 0
-
 
 
 class TestWorkerDoesNotIncrementProcessedOnError:
@@ -491,6 +475,7 @@ class TestWorkerDoesNotIncrementProcessedOnError:
 
         # Make second file fail (first succeeds, returns None)
         call_count = [0]
+
         def failing_add(emb, ids):
             call_count[0] += 1
             if call_count[0] == 2:
@@ -508,7 +493,6 @@ class TestWorkerDoesNotIncrementProcessedOnError:
         server._stop_event.set()
         assert server.worker_state["processed"] == 1
         assert server.worker_state["errors"] == 1
-
 
 
 class TestBackgroundWorkerPriorityProcessing:
@@ -563,7 +547,6 @@ class TestBackgroundWorkerPriorityProcessing:
         assert priorities == ["remove", "new", "changed", "reindex"]
 
 
-
 class TestBackgroundWorkerStateTransitions:
     """Worker state transitions between idle and indexing."""
 
@@ -592,10 +575,12 @@ class TestBackgroundWorkerStateTransitions:
         server._stop_event.clear()
         result_queue = []
         original_dequeue = server.dequeue_batch
+
         def capture_and_dequeue(*a, **kw):
             batch = original_dequeue(*a, **kw)
             result_queue.append((server.worker_state["status"], len(batch)))
             return batch
+
         mocker.patch.object(server, "dequeue_batch", side_effect=capture_and_dequeue)
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
@@ -604,12 +589,11 @@ class TestBackgroundWorkerStateTransitions:
         assert any(status == "idle" for status, _ in result_queue)
 
 
-
 class TestIdleWatchdogStopDuringSleep:
     """Idle watchdog exits quickly when stop event set during sleep."""
 
     def test_watchdog_stops_when_event_set_during_sleep(self):
-        os.environ["CHECK_INTERVAL_test"] = "1"
+        os.environ["CHECK_INTERVAL_TEST"] = "1"
         server.idle_watchdog()
         # When _stop_event is already set (from clean_globals), should return immediately
         assert True
@@ -619,7 +603,6 @@ class TestIdleWatchdogStopDuringSleep:
         server.last_activity = 0
         server.idle_watchdog()
         assert True
-
 
 
 class TestBackgroundWorkerMultipleBatches:
@@ -649,11 +632,13 @@ class TestBackgroundWorkerMultipleBatches:
         mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
         mock_index.write.side_effect = lambda p: open(p, "w").close()
         call_count = [0]
+
         def flaky_add(emb, ids):
             call_count[0] += 1
             if call_count[0] == 3:
                 raise RuntimeError("third fails")
             return None
+
         mock_index.add_with_ids.side_effect = flaky_add
         files = []
         for i in range(7):
@@ -672,7 +657,6 @@ class TestBackgroundWorkerMultipleBatches:
         assert server.worker_state["errors"] == 1
 
 
-
 class TestBackgroundWorkerPriorityAcrossBatches:
     """Priority ordering preserved when items span multiple batches."""
 
@@ -686,24 +670,25 @@ class TestBackgroundWorkerPriorityAcrossBatches:
         server._stop_event.clear()
         results = []
         original_dequeue = server.dequeue_batch
+
         def capturing_dequeue(*a, **kw):
             batch = original_dequeue(*a, **kw)
             if batch:
                 results.extend((p, f) for p, f in batch)
             return batch
+
         mocker.patch.object(server, "dequeue_batch", side_effect=capturing_dequeue)
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
         time.sleep(0.15)
         server._stop_event.set()
         remove_items = [p for p, _ in results if p == "remove"]
-        new_items = [p for p, _ in results if p == "new"]
+        [p for p, _ in results if p == "new"]
         # All removals should appear before any new items
         if remove_items:
             last_remove_idx = max(i for i, (p, _) in enumerate(results) if p == "remove")
             first_new_idx = min(i for i, (p, _) in enumerate(results) if p == "new")
             assert last_remove_idx < first_new_idx
-
 
 
 class TestBackgroundWorkerIdleStatusAfterProcessing:
@@ -724,7 +709,6 @@ class TestBackgroundWorkerIdleStatusAfterProcessing:
         time.sleep(0.02)
         assert server.worker_state["status"] == "idle" or server.worker_state["processed"] == 1
         server._stop_event.set()
-
 
 
 class TestBackgroundWorkerAllPriorities:
@@ -765,7 +749,6 @@ class TestBackgroundWorkerAllPriorities:
         assert str(f) in server.meta
 
 
-
 class TestWorkerStatusTransitionsDetailed:
     """Worker state machine: idle -> indexing -> idle."""
 
@@ -781,18 +764,19 @@ class TestWorkerStatusTransitionsDetailed:
         server._stop_event.clear()
         statuses = []
         original_sleep = time.sleep
+
         def tracking_sleep(s):
             statuses.append(server.worker_state["status"])
             if len(statuses) >= 5:
                 server._stop_event.set()
             original_sleep(min(s, 0.02))
+
         mocker.patch.object(time, "sleep", side_effect=tracking_sleep)
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
         t.join(timeout=3)
         assert "indexing" in statuses
         assert "idle" in statuses
-
 
 
 class TestBackgroundWorkerReindexOnly:
@@ -816,7 +800,6 @@ class TestBackgroundWorkerReindexOnly:
         assert str(f) in server.meta
 
 
-
 class TestBackgroundWorkerNanBatchInterval:
     """background_worker handles NaN BATCH_INTERVAL gracefully."""
 
@@ -836,7 +819,6 @@ class TestBackgroundWorkerNanBatchInterval:
         t.join(timeout=2)
 
 
-
 class TestBackgroundWorkerAllRemoveBatchEmptyMeta:
     """background_worker processes remove-only batch when meta is empty."""
 
@@ -851,7 +833,6 @@ class TestBackgroundWorkerAllRemoveBatchEmptyMeta:
         time.sleep(0.05)
         server._stop_event.set()
         assert server.worker_state["errors"] == 0
-
 
 
 class TestBackgroundWorkerProcessedAfterIdleReindex:
@@ -873,10 +854,6 @@ class TestBackgroundWorkerProcessedAfterIdleReindex:
         assert server.worker_state["processed"] >= 1
 
 
-
-
-
-
 class TestBackgroundWorkerMultipleBatchesRemoveOnly:
     """background_worker handles remove-only items that span multiple batches."""
 
@@ -893,7 +870,6 @@ class TestBackgroundWorkerMultipleBatchesRemoveOnly:
         time.sleep(0.15)
         server._stop_event.set()
         assert server.worker_state["processed"] == 10
-
 
 
 class TestBackgroundWorkerStopDuringProcessing:
@@ -924,7 +900,6 @@ class TestBackgroundWorkerStopDuringProcessing:
         assert server.worker_state["processed"] == 1 or server.worker_state["processed"] == 0
 
 
-
 class TestConcurrentTouchStress:
     """touch is safe under heavy concurrent load."""
 
@@ -941,7 +916,6 @@ class TestConcurrentTouchStress:
         assert abs(time.time() - server.last_activity) < 3.0
 
 
-
 class TestBackgroundWorkerBatchSizeZero:
     """Worker doesn't busy-loop when BATCH_SIZE is 0."""
 
@@ -956,7 +930,6 @@ class TestBackgroundWorkerBatchSizeZero:
         assert server.worker_state["status"] == "idle"
         server._stop_event.set()
         t.join(timeout=1)
-
 
 
 class TestWorkerStateNotLeakedAcrossBatches:
@@ -987,7 +960,6 @@ class TestWorkerStateNotLeakedAcrossBatches:
         assert server.worker_state["processed"] >= 1
 
 
-
 class TestBackgroundWorkerStopEventPreset:
     """background_worker exits immediately if _stop_event is already set."""
 
@@ -1000,7 +972,6 @@ class TestBackgroundWorkerStopEventPreset:
         assert not t.is_alive()
 
 
-
 class TestBackgroundWorkerEncodeFailureMixedBatch:
     """Worker handles mixed batch where some files fail encoding."""
 
@@ -1010,6 +981,7 @@ class TestBackgroundWorkerEncodeFailureMixedBatch:
 
         class FlakyEncode:
             call_count = 0
+
             def __call__(self, items):
                 self.call_count += 1
                 if self.call_count == 1:
@@ -1033,7 +1005,6 @@ class TestBackgroundWorkerEncodeFailureMixedBatch:
         assert server.worker_state["processed"] >= 1
 
 
-
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 class TestWorkerKilledByBaseException:
     """Worker thread dies when handle_index raises BaseException (not caught by except Exception)."""
@@ -1041,6 +1012,7 @@ class TestWorkerKilledByBaseException:
     def test_worker_dies_on_base_from_handle_index(self, tmp_path, mock_model, mock_index, mocker):
         class Fatal(BaseException):
             pass
+
         mock_model.encode.side_effect = Fatal("fatal in encode")
         mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
         mock_index.write.side_effect = lambda p: open(p, "w").close()
@@ -1052,5 +1024,3 @@ class TestWorkerKilledByBaseException:
         t.start()
         t.join(timeout=1)
         assert not t.is_alive()
-
-

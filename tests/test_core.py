@@ -1,20 +1,16 @@
 """
 Auto-generated test file for core.
 """
+
 import builtins
 import json
 import os
-import time
 import threading
-import signal as sig_module
-from collections import deque
+import time
 
-import numpy as np
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
 
 import server
-
 
 
 class TestColdStartRecovery:
@@ -42,8 +38,10 @@ class TestColdStartRecovery:
         meta_bad = {"/gone.py": {"id": 99, "mtime": 0, "size": 0, "last_indexed": 0}}
         with open(server.META_PATH, "w") as f:
             json.dump(meta_bad, f)
-        store_ser = {"2": {"path": "/store_only.py", "content": "y", "mtime": 50, "size": 5, "last_indexed": 100},
-                     "3": {"path": "/another.py", "content": "z", "mtime": 60, "size": 6, "last_indexed": 110}}
+        store_ser = {
+            "2": {"path": "/store_only.py", "content": "y", "mtime": 50, "size": 5, "last_indexed": 100},
+            "3": {"path": "/another.py", "content": "z", "mtime": 60, "size": 6, "last_indexed": 110},
+        }
         with open(server.STORE_PATH, "w") as f:
             json.dump(store_ser, f)
 
@@ -86,16 +84,15 @@ class TestColdStartRecovery:
         assert server.current_id == 13
 
 
-
 class TestLazyLoading:
     def test_ensure_model_loads_on_first_call(self, mocker):
-        mocker.patch.object(server._ModelClient, '_start')
+        mocker.patch.object(server._ModelClient, "_start")
         server.ensure_model()
         assert isinstance(server.model, server._ModelClient)
         assert server.model._model_name == "BAAI/bge-small-en-v1.5"
 
     def test_ensure_model_does_not_reload(self, mocker):
-        mocker.patch.object(server._ModelClient, '_start')
+        mocker.patch.object(server._ModelClient, "_start")
         server.ensure_model()
         model_id = id(server.model)
         server.ensure_model()
@@ -115,7 +112,7 @@ class TestLazyLoading:
         mock_load.assert_called_once_with(server.INDEX_PATH)
 
     def test_ensure_index_handles_corrupt(self, mocker):
-        mock_load = mocker.patch("server.IdMapIndex.load", side_effect=Exception("corrupt"))
+        mocker.patch("server.IdMapIndex.load", side_effect=Exception("corrupt"))
         with open(server.INDEX_PATH, "wb") as f:
             f.write(b"garbage")
 
@@ -123,13 +120,12 @@ class TestLazyLoading:
         assert server.index is not None
 
     def test_ensure_resources_loads_both(self, mocker):
-        mocker.patch.object(server._ModelClient, '_start')
+        mocker.patch.object(server._ModelClient, "_start")
         mocker.patch("server.IdMapIndex.load")
 
         server.ensure_resources()
         assert server.model is not None
         assert server.index is not None
-
 
 
 class TestValidate:
@@ -138,7 +134,6 @@ class TestValidate:
 
     def test_validate_imports_passes(self):
         server.validate_imports()
-
 
 
 class TestStorageConsistency:
@@ -178,7 +173,6 @@ class TestStorageConsistency:
         assert len(server.store) == 1
         assert str(f) in server.meta
         assert server.meta[str(f)]["id"] == 1
-
 
 
 class TestLoadAndVerifyEdgeCases:
@@ -244,7 +238,6 @@ class TestLoadAndVerifyEdgeCases:
         assert server.meta == {}
 
 
-
 class TestUnicodeAndSpecialPaths:
     def test_unicode_file_path(self, tmp_path, mock_model, mock_index):
         server.current_id = 1
@@ -275,7 +268,6 @@ class TestUnicodeAndSpecialPaths:
         server.current_id = 1
         server.handle_index(str(f))
         assert str(f) in server.meta
-
 
 
 class TestCorruptStoreEntries:
@@ -320,7 +312,6 @@ class TestCorruptStoreEntries:
         assert "/b.py" not in server.meta
 
 
-
 class TestValidateFailures:
     def test_validate_python_version_old_version_exits(self, mocker):
         vi = mocker.MagicMock(major=3, minor=7, micro=0)
@@ -336,7 +327,6 @@ class TestValidateFailures:
         mock_exit.assert_called_once_with(1)
 
 
-
 class TestLoadAndVerifyTOCTOU:
     def test_meta_file_deleted_between_exists_and_open(self, mocker):
         mocker.patch("os.path.exists", side_effect=[True, False])
@@ -349,7 +339,6 @@ class TestLoadAndVerifyTOCTOU:
         mocker.patch("builtins.open", side_effect=FileNotFoundError("file vanished"))
         server.load_and_verify()
         assert server.store == {}
-
 
 
 class TestNonDictMetaValues:
@@ -383,7 +372,6 @@ class TestNonDictMetaValues:
         # no crash
 
 
-
 class TestProcessCountMatches:
     def test_processed_count_matches_indexed_files(self, tmp_path, mock_model, mock_index, mocker):
         mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
@@ -403,7 +391,6 @@ class TestProcessCountMatches:
 
         assert server.worker_state["processed"] == 3
         assert len(server.meta) == 3
-
 
 
 class TestPingPongConsistency:
@@ -432,7 +419,6 @@ class TestPingPongConsistency:
         assert second_id in server.store
 
 
-
 class TestValidateEdgeCases:
     def test_validate_python_version_acceptable(self):
         # Should not raise or exit for current Python
@@ -446,7 +432,6 @@ class TestValidateEdgeCases:
         mock_imports.assert_called_once()
 
 
-
 class TestValidateEnvironmentOrder:
     def test_validate_python_called_before_imports(self, mocker):
         calls = []
@@ -456,7 +441,6 @@ class TestValidateEnvironmentOrder:
         assert calls == ["py", "imports"]
 
 
-
 class TestStartupCleanup:
     """Stale .tmp files are cleaned up on startup."""
 
@@ -464,7 +448,7 @@ class TestStartupCleanup:
         mocker.patch("server.validate_environment")
         mocker.patch("os.makedirs")
         mocker.patch("server.load_and_verify")
-        mock_thread = mocker.patch("threading.Thread")
+        mocker.patch("threading.Thread")
         mocker.patch("server.sig_module.signal")
         mocker.patch("server.mcp.run")
 
@@ -481,7 +465,7 @@ class TestStartupCleanup:
         mocker.patch("server.validate_environment")
         mocker.patch("os.makedirs")
         mocker.patch("server.load_and_verify")
-        mock_thread = mocker.patch("threading.Thread")
+        mocker.patch("threading.Thread")
         mocker.patch("server.sig_module.signal")
         mocker.patch("server.mcp.run")
 
@@ -491,7 +475,7 @@ class TestStartupCleanup:
         mocker.patch("server.validate_environment")
         mocker.patch("os.makedirs")
         mocker.patch("server.load_and_verify")
-        mock_thread = mocker.patch("threading.Thread")
+        mocker.patch("threading.Thread")
         mocker.patch("server.sig_module.signal")
         mocker.patch("server.mcp.run")
 
@@ -499,7 +483,6 @@ class TestStartupCleanup:
         mock_remove = mocker.patch("os.remove", side_effect=PermissionError("locked"))
         server.main()
         mock_remove.assert_called()
-
 
 
 class TestLoadAndVerifyNonDictInMeta:
@@ -522,7 +505,6 @@ class TestLoadAndVerifyNonDictInMeta:
         server.load_and_verify()
         assert len(server.store) == 1
         # Entry without path is in store but not rebuilt into meta
-
 
 
 class TestLoadAndVerifyStoreNonDict:
@@ -559,7 +541,6 @@ class TestLoadAndVerifyStoreNonDict:
         assert server.current_id > 1
 
 
-
 class TestLoadAndVerifyNonDictStoreRebuild:
     """load_and_verify rebuilds from store when meta is invalid."""
 
@@ -579,7 +560,6 @@ class TestLoadAndVerifyNonDictStoreRebuild:
         assert server.current_id == 2
 
 
-
 class TestFindStaleNonDictValues:
     """find_stale_files handles non-dict meta entries gracefully."""
 
@@ -594,7 +574,6 @@ class TestFindStaleNonDictValues:
         assert result == []
 
 
-
 class TestValidateEnvironmentDebugPath:
     """validate_environment calls debug when all checks pass."""
 
@@ -606,7 +585,6 @@ class TestValidateEnvironmentDebugPath:
         captured = capsys.readouterr()
         assert "All startup validations passed" in captured.err
         server.DEBUG_MODE = False
-
 
 
 class TestFindStaleBoundary:
@@ -624,7 +602,6 @@ class TestFindStaleBoundary:
         assert stale == []
 
 
-
 class TestLoadAndVerifyStoreDuplicatePaths:
     """load_and_verify handles store entries with duplicate paths."""
 
@@ -637,7 +614,6 @@ class TestLoadAndVerifyStoreDuplicatePaths:
         server.load_and_verify()
         assert "/dup.py" in server.meta
         assert server.meta["/dup.py"]["id"] == 2
-
 
 
 class TestLoadAndVerifyNonSerializableJson:
@@ -653,7 +629,6 @@ class TestLoadAndVerifyNonSerializableJson:
         assert server.meta == {}
 
 
-
 class TestValidateEnvironmentDebugFlagOff:
     """validate_environment does not call debug when DEBUG_MODE is False."""
 
@@ -666,17 +641,18 @@ class TestValidateEnvironmentDebugFlagOff:
         assert captured.err == ""
 
 
-
 class TestValidateImportsEachPackageMissing:
     """validate_imports exits with correct message for each missing package."""
 
     @classmethod
     def _make_fake_import(cls, fail_name: str):
         real_import = builtins.__import__
+
         def fake_import(name, *a, **kw):
             if name == fail_name:
                 raise ImportError(f"no {fail_name}")
             return real_import(name, *a, **kw)
+
         return fake_import
 
     def test_fastmcp_missing_exits(self, mocker):
@@ -706,14 +682,12 @@ class TestValidateImportsEachPackageMissing:
         mock_exit.assert_called_once_with(1)
 
 
-
 class TestFindStaleNegativeMaxAge:
     """find_stale_files with negative max_age_days (all files qualify)."""
 
     def test_negative_max_age_includes_all(self, populated_state):
         stale = server.find_stale_files(max_age_days=-1)
         assert len(stale) == 3  # all 3 in populated_state are stale
-
 
 
 class TestLoadAndVerifyWhitespacePath:
@@ -730,18 +704,20 @@ class TestLoadAndVerifyWhitespacePath:
         assert 1 not in server.meta
 
 
-
 class TestFindStaleBoundaryZeroStale:
     """find_stale_files returns empty when no files exceed stale age."""
 
     def test_all_recent_no_stale(self, populated_state, mocker):
         now = time.time()
-        mocker.patch.object(server, "meta", {
-            "/new.py": {"mtime": now, "size": 10, "last_indexed": now},
-        })
+        mocker.patch.object(
+            server,
+            "meta",
+            {
+                "/new.py": {"mtime": now, "size": 10, "last_indexed": now},
+            },
+        )
         stale = server.find_stale_files(max_age_days=30)
         assert stale == []
-
 
 
 class TestValidateBothFail:
@@ -752,7 +728,6 @@ class TestValidateBothFail:
         mocker.patch("server.validate_imports", side_effect=SystemExit(1))
         with pytest.raises(SystemExit):
             server.validate_environment()
-
 
 
 class TestLoadAndVerifyStoreDuplicatePathLastWins:
@@ -768,7 +743,6 @@ class TestLoadAndVerifyStoreDuplicatePathLastWins:
         assert server.meta["/dup.py"]["id"] == 2
 
 
-
 class TestLoadAndVerifyEmptyStringKeys:
     """load_and_verify handles store with empty string keys."""
 
@@ -781,7 +755,6 @@ class TestLoadAndVerifyEmptyStringKeys:
         server.load_and_verify()
         assert server.store == {}
         assert server.meta == {}
-
 
 
 class TestFindStaleNoneArguments:
@@ -801,7 +774,6 @@ class TestFindStaleNoneArguments:
         server.meta = {"/a.py": {"id": 1, "last_indexed": 0}}
         stale = server.find_stale_files(max_age_days=0, max_files=0)
         assert stale == []
-
 
 
 class TestLoadAndVerifyStoreJsonEdgeCases:
@@ -828,6 +800,7 @@ class TestLoadAndVerifyStoreJsonEdgeCases:
 
     def test_store_with_pathlike_key_value(self):
         import pathlib
+
         with open(server.META_PATH, "w") as f:
             json.dump({}, f)
         store = {"1": {"path": pathlib.PurePosixPath("/a.py"), "content": "x"}}
@@ -836,7 +809,6 @@ class TestLoadAndVerifyStoreJsonEdgeCases:
         server.load_and_verify()
         assert 1 in server.store
         assert "/a.py" in server.meta
-
 
 
 class TestLoadAndVerifyRepeatedCalls:
@@ -856,7 +828,6 @@ class TestLoadAndVerifyRepeatedCalls:
         assert server.current_id == state_after_first["current_id"]
 
 
-
 class TestLoadAndVerifyMetaIsList:
     """load_and_verify handles meta.json being a JSON array."""
 
@@ -869,21 +840,22 @@ class TestLoadAndVerifyMetaIsList:
         assert "/a.py" in server.meta
 
 
-
 class TestEnsureModelImportFailure:
     """validate_imports exits when fastembed is not installed."""
 
     def test_import_failure_propagates(self, mocker):
         import builtins
+
         original_import = builtins.__import__
+
         def fake_import(name, *args, **kw):
             if name == "fastembed":
                 raise ImportError("no module named fastembed")
             return original_import(name, *args, **kw)
+
         mocker.patch.object(builtins, "__import__", side_effect=fake_import)
         with pytest.raises(SystemExit):
             server.validate_imports()
-
 
 
 class TestStoreJsonFloatKey:
@@ -897,7 +869,6 @@ class TestStoreJsonFloatKey:
         server.load_and_verify()
         assert server.store == {}
         assert server.meta == {}
-
 
 
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
@@ -918,7 +889,6 @@ class TestCorruptedDequeItem:
         t.join(timeout=2)
 
 
-
 class TestZeroWidthContent:
     """handle_index with zero-width unicode characters (not stripped by .strip())."""
 
@@ -933,7 +903,6 @@ class TestZeroWidthContent:
         assert "\u200b" in server.store[1]["content"]
 
 
-
 class TestStaleTmpRemoveFailure:
     """main() continues cleanup loop even if os.remove on one .tmp file fails."""
 
@@ -942,11 +911,13 @@ class TestStaleTmpRemoveFailure:
         open(server.META_PATH + ".tmp", "w").close()
         real_remove = os.remove
         call_count = [0]
+
         def flaky_remove(path):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise PermissionError("locked")
             real_remove(path)
+
         mocker.patch("os.remove", side_effect=flaky_remove)
         mocker.patch("server.validate_environment")
         mocker.patch("os.makedirs")
@@ -956,7 +927,6 @@ class TestStaleTmpRemoveFailure:
         mocker.patch("server.mcp.run")
         server.main()
         assert not os.path.exists(server.META_PATH + ".tmp")
-
 
 
 class TestReindexRollbackStoreEntryNone:
@@ -978,7 +948,6 @@ class TestReindexRollbackStoreEntryNone:
         assert server.meta[str(f)]["id"] == old_id
 
 
-
 class TestNonStringQueryType:
     """search_codebase returns error for non-string query types."""
 
@@ -998,7 +967,6 @@ class TestNonStringQueryType:
         assert "empty" in result.lower()
 
 
-
 class TestFindStaleFloatMaxDays:
     """find_stale_files with float max_age_days truncates to int."""
 
@@ -1009,13 +977,11 @@ class TestFindStaleFloatMaxDays:
 
     def test_float_max_age_zero_truncates(self):
         future = time.time() + 3600
-        server.meta = {"/new.py": {"id": 1, "last_indexed": future},
-                       "/old.py": {"id": 2, "last_indexed": 0}}
+        server.meta = {"/new.py": {"id": 1, "last_indexed": future}, "/old.py": {"id": 2, "last_indexed": 0}}
         stale = server.find_stale_files(max_age_days=0, max_files=10)
         # max_age_days=0 → cutoff ≈ now — epoch-old file is stale, future file is not
         assert "/old.py" in stale
         assert "/new.py" not in stale
-
 
 
 class TestStaleReindexMultiIteration:
@@ -1034,21 +1000,23 @@ class TestStaleReindexMultiIteration:
 
         def always_stale(*a, **kw):
             return [str(f)]
+
         mocker.patch.object(server, "find_stale_files", side_effect=always_stale)
         iter_count = [0]
         original_sleep = time.sleep
+
         def tracking_sleep(s):
             iter_count[0] += 1
             if iter_count[0] >= 6:
                 server._stop_event.set()
             original_sleep(min(s, 0.02))
+
         mocker.patch.object(time, "sleep", side_effect=tracking_sleep)
         server._stop_event.clear()
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
         t.join(timeout=5)
         assert iter_count[0] < 20
-
 
 
 class TestLoadAndVerifyStoreNoPath:
@@ -1071,5 +1039,3 @@ class TestLoadAndVerifyStoreNoPath:
         server.load_and_verify()
         assert 1 in server.store
         assert server.meta == {}
-
-

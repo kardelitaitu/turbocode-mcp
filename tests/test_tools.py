@@ -1,20 +1,16 @@
 """
 Auto-generated test file for tools.
 """
-import builtins
+
 import json
 import os
-import time
 import threading
-import signal as sig_module
-from collections import deque
+import time
 
 import numpy as np
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
 
 import server
-
 
 
 class TestLogging:
@@ -37,14 +33,12 @@ class TestLogging:
         assert "hello world" in captured.err
 
 
-
 class TestTouch:
     def test_touch_resets_timer(self):
         before = server.last_activity
         server.last_activity = before - 1000
         server.touch()
         assert server.last_activity > before
-
 
 
 class TestResources:
@@ -80,15 +74,14 @@ class TestResources:
         assert data["processed"] == 0
 
 
-
 class TestMainFunction:
     def test_main_parses_debug_flag(self, mocker):
         mocker.patch("sys.argv", ["server.py", "--debug"])
         mock_validate = mocker.patch("server.validate_environment")
-        mock_makedirs = mocker.patch("os.makedirs")
-        mock_load = mocker.patch("server.load_and_verify")
-        mock_thread = mocker.patch("threading.Thread")
-        mock_signal = mocker.patch("server.sig_module.signal")
+        mocker.patch("os.makedirs")
+        mocker.patch("server.load_and_verify")
+        mocker.patch("threading.Thread")
+        mocker.patch("server.sig_module.signal")
         mocker.patch("server.mcp.run")
 
         server.main()
@@ -98,11 +91,11 @@ class TestMainFunction:
 
     def test_main_no_debug_flag(self, mocker):
         mocker.patch("sys.argv", ["server.py"])
-        mock_validate = mocker.patch("server.validate_environment")
-        mock_makedirs = mocker.patch("os.makedirs")
-        mock_load = mocker.patch("server.load_and_verify")
-        mock_thread = mocker.patch("threading.Thread")
-        mock_signal = mocker.patch("server.sig_module.signal")
+        mocker.patch("server.validate_environment")
+        mocker.patch("os.makedirs")
+        mocker.patch("server.load_and_verify")
+        mocker.patch("threading.Thread")
+        mocker.patch("server.sig_module.signal")
         mocker.patch("server.mcp.run")
 
         server.DEBUG_MODE = False
@@ -111,10 +104,9 @@ class TestMainFunction:
         assert server.DEBUG_MODE is False
 
 
-
 class TestEnsureResourcesFailure:
     def test_model_load_failure_propagates(self, mocker):
-        mocker.patch.object(server._ModelClient, '_start', side_effect=RuntimeError("download failed"))
+        mocker.patch.object(server._ModelClient, "_start", side_effect=RuntimeError("download failed"))
         with pytest.raises(RuntimeError, match="download failed"):
             server.ensure_model()
 
@@ -126,19 +118,19 @@ class TestEnsureResourcesFailure:
         assert server.index is not None
 
 
-
 class TestMainFailurePaths:
     def test_main_survives_load_and_verify_crash(self, mocker):
         mocker.patch("sys.argv", ["server.py"])
         mocker.patch("server.validate_environment")
         mocker.patch("os.makedirs")
         mocker.patch("server.load_and_verify", side_effect=RuntimeError("rebuild failed"))
-        mock_thread = mocker.patch("threading.Thread")
+        mocker.patch("threading.Thread")
         mocker.patch("server.sig_module.signal")
         mocker.patch("server.mcp.run")
         import copy
-        meta_before = copy.copy(server.meta)
-        store_before = copy.copy(server.store)
+
+        copy.copy(server.meta)
+        copy.copy(server.store)
         server.main()
         assert server.current_id == 1
 
@@ -149,11 +141,13 @@ class TestMainFailurePaths:
         mocker.patch("server.load_and_verify")
         real_thread = threading.Thread
         call_count = [0]
+
         def failing_thread(**kw):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise RuntimeError("cannot create thread")
             return real_thread(**kw)
+
         mocker.patch("threading.Thread", side_effect=failing_thread)
         mocker.patch("server.sig_module.signal")
         mock_run = mocker.patch("server.mcp.run")
@@ -170,7 +164,6 @@ class TestMainFailurePaths:
         mock_run = mocker.patch("server.mcp.run")
         server.main()
         mock_run.assert_called_once()
-
 
 
 class TestLogCapturing:
@@ -195,7 +188,6 @@ class TestLogCapturing:
         server.DEBUG_MODE = False
 
 
-
 class TestTouchInitialValue:
     """touch() sets last_activity to a recent time."""
 
@@ -205,9 +197,8 @@ class TestTouchInitialValue:
         assert server.last_activity >= before
 
 
-
 class TestMainMakedirsFailure:
-    """main() handles makedirs failure gracefully."""
+    """main() handles os.makedirs failure gracefully."""
 
     def test_main_survives_makedirs_failure(self, mocker):
         mocker.patch.object(server, "validate_environment")
@@ -222,6 +213,16 @@ class TestMainMakedirsFailure:
         except Exception:
             pytest.fail("main() raised on makedirs failure")
 
+    def test_makedirs_failure_logs_warning(self, mocker, capsys):
+        mocker.patch("server.validate_environment")
+        mocker.patch("os.makedirs", side_effect=PermissionError("access denied"))
+        mocker.patch("server.load_and_verify")
+        mocker.patch("threading.Thread")
+        mocker.patch("server.sig_module.signal")
+        mocker.patch("server.mcp.run")
+        server.main()
+        captured = capsys.readouterr()
+        assert "Cannot create" in captured.err
 
 
 class TestMainDebugPaths:
@@ -241,7 +242,6 @@ class TestMainDebugPaths:
         assert "INDEX_PATH" in captured.err
 
 
-
 class TestTouchCalledByToolsAndResources:
     """Every tool and resource calls touch() to reset idle timer."""
 
@@ -257,7 +257,7 @@ class TestTouchCalledByToolsAndResources:
     def test_search_codebase_calls_touch(self, mocker, mock_model, mock_index):
         mock_touch = mocker.patch("server.touch")
         server.store[1] = {"path": "/dummy.py", "content": "x"}
-        result = server.search_codebase("test")
+        server.search_codebase("test")
         mock_touch.assert_called_once()
 
     def test_get_index_stats_calls_touch(self, mocker):
@@ -324,7 +324,6 @@ class TestTouchCalledByToolsAndResources:
         mock_touch.assert_called_once()
 
 
-
 class TestMainLoadAndVerifyCrashLogsWarning:
     """main() logs warning when load_and_verify raises."""
 
@@ -333,7 +332,7 @@ class TestMainLoadAndVerifyCrashLogsWarning:
         mocker.patch("server.validate_environment")
         mocker.patch("os.makedirs")
         mocker.patch("server.load_and_verify", side_effect=RuntimeError("corrupt state"))
-        mock_thread = mocker.patch("threading.Thread")
+        mocker.patch("threading.Thread")
         mocker.patch("server.sig_module.signal")
         mocker.patch("server.mcp.run")
         server.main()
@@ -344,7 +343,6 @@ class TestMainLoadAndVerifyCrashLogsWarning:
         assert server.store == {}
 
 
-
 class TestTouchAfterLongIdle:
     """touch() resets last_activity even after long idle."""
 
@@ -353,7 +351,6 @@ class TestTouchAfterLongIdle:
         before = time.time()
         server.touch()
         assert server.last_activity >= before
-
 
 
 class TestMainStaleTmpCleanup:
@@ -393,23 +390,6 @@ class TestMainStaleTmpCleanup:
         server.main()
         for p in [server.INDEX_PATH, server.META_PATH, server.STORE_PATH]:
             assert not os.path.exists(p + ".tmp"), f"Stale tmp not cleaned: {p}.tmp"
-
-
-
-class TestMainMakedirsFailure:
-    """main() handles os.makedirs failure gracefully."""
-
-    def test_makedirs_failure_logs_warning(self, mocker, capsys):
-        mocker.patch("server.validate_environment")
-        mocker.patch("os.makedirs", side_effect=PermissionError("access denied"))
-        mocker.patch("server.load_and_verify")
-        mocker.patch("threading.Thread")
-        mocker.patch("server.sig_module.signal")
-        mocker.patch("server.mcp.run")
-        server.main()
-        captured = capsys.readouterr()
-        assert "Cannot create" in captured.err
-
 
 
 class TestIndexWorkspace:
@@ -478,7 +458,6 @@ class TestIndexWorkspace:
         assert "Permission denied" in result
 
 
-
 class TestUpdateFileIndex:
     """Tests for the update_file_index tool."""
 
@@ -515,7 +494,6 @@ class TestUpdateFileIndex:
         assert "Failed to re-index" in result
 
 
-
 class TestGetIndexStatus:
     """Tests for the get_index_status tool."""
 
@@ -533,7 +511,6 @@ class TestGetIndexStatus:
         result = server.get_index_status()
         assert "Files tracked: 0" in result
         assert "Vectors: 0" in result
-
 
 
 class TestDropIndex:
@@ -572,14 +549,13 @@ class TestDropIndex:
         assert len(server.meta) == 0
 
 
-
 class TestSemanticSearch:
     """Tests for the semantic_search tool."""
 
     def test_calls_touch(self, mocker, mock_model, mock_index):
         mock_touch = mocker.patch("server.touch")
         server.store[1] = {"path": "/d.py", "content": "test"}
-        result = server.semantic_search("query")
+        server.semantic_search("query")
         mock_touch.assert_called_once()
 
     def test_empty_query(self):
@@ -601,7 +577,6 @@ class TestSemanticSearch:
     def test_empty_store(self):
         result = server.semantic_search("test")
         assert "empty" in result
-
 
 
 class TestKeywordSearch:
@@ -650,7 +625,6 @@ class TestKeywordSearch:
         assert "1 matches" in result
 
 
-
 class TestReadFileContent:
     """Tests for the read_file_content tool."""
 
@@ -696,5 +670,3 @@ class TestMainMcpRunRaises:
         mocker.patch("server.mcp.run", side_effect=RuntimeError("mcp crashed"))
         with pytest.raises(RuntimeError, match="mcp crashed"):
             server.main()
-
-
