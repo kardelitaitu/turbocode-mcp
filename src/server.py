@@ -115,6 +115,45 @@ def ensure_resources() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════
+# Phase 6.3 — Startup Validation
+# ═══════════════════════════════════════════════════════════════
+
+
+def validate_python_version() -> None:
+    """Verify Python version >= 3.9."""
+    if sys.version_info.major < 3 or (sys.version_info.major == 3 and sys.version_info.minor < 9):
+        log(f"ERROR: Python >= 3.9 required (found {sys.version_info.major}.{sys.version_info.minor})")
+        sys.exit(1)
+
+
+def validate_imports() -> None:
+    """Verify critical Python packages are importable."""
+    missing = []
+    for mod_name, import_name in [
+        ("fastmcp", "fastmcp"),
+        ("turbovec", "turbovec"),
+        ("sentence-transformers", "sentence_transformers"),
+        ("numpy", "numpy"),
+    ]:
+        try:
+            __import__(import_name)
+        except ImportError:
+            missing.append(mod_name)
+
+    if missing:
+        log(f"ERROR: Missing required Python packages: {', '.join(missing)}")
+        log("Please reinstall: npm install -g turbocode-mcp")
+        sys.exit(1)
+
+
+def validate_environment() -> None:
+    """Run all startup validations."""
+    validate_python_version()
+    validate_imports()
+    debug("All startup validations passed.")
+
+
+# ═══════════════════════════════════════════════════════════════
 # Phase 2.4 — Atomic Persistence
 # ═══════════════════════════════════════════════════════════════
 
@@ -589,6 +628,9 @@ def main() -> None:
     # Parse CLI flags
     if "--debug" in sys.argv:
         DEBUG_MODE = True
+
+    # Run startup validations
+    validate_environment()
 
     os.makedirs(TURBOCODE_DIR, exist_ok=True)
 
