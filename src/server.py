@@ -687,6 +687,9 @@ def index_directory(directory_path: str, respect_gitignore: bool = True) -> str:
 
     if not isinstance(directory_path, str) or not directory_path.strip():
         return "Error: Directory path cannot be empty."
+
+    directory_path = os.path.normpath(directory_path.strip().rstrip("\\/"))
+
     if not os.path.exists(directory_path):
         return f"Error: Directory '{directory_path}' not found."
     if not os.path.isdir(directory_path):
