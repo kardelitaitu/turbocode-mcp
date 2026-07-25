@@ -89,7 +89,11 @@ def ensure_model() -> None:
     with load_lock:
         if model is not None:
             return
-        from sentence_transformers import SentenceTransformer
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            log("ERROR: sentence-transformers not installed. Please run: npm install -g turbocode-mcp")
+            sys.exit(1)
         log("Loading embedding model (first call)...")
         model = SentenceTransformer("all-MiniLM-L6-v2")
 
@@ -137,12 +141,13 @@ def validate_python_version() -> None:
 
 
 def validate_imports() -> None:
-    """Verify critical Python packages are importable."""
+    """Verify critical lightweight Python packages are importable.
+    Heavy packages (sentence-transformers, turbovec) are checked at
+    first-use time to keep cold start under 0.5s.
+    """
     missing = []
     for mod_name, import_name in [
         ("fastmcp", "fastmcp"),
-        ("turbovec", "turbovec"),
-        ("sentence-transformers", "sentence_transformers"),
         ("numpy", "numpy"),
     ]:
         try:
@@ -379,7 +384,7 @@ def handle_index(file_path: str) -> None:
         log(f"WARNING: Cannot stat {file_path} for file type check. Skipping.")
         return
     try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        with open(file_path, "r", encoding="utf-8-sig", errors="replace") as f:
             content = f.read()
     except Exception:
         log(f"WARNING: Cannot read {file_path}. Skipping.")
@@ -586,6 +591,10 @@ def index_directory(directory_path: str) -> str:
 
     SUPPORTED_EXT = (".py", ".rs", ".md", ".txt")
 
+    # Snapshot meta once to avoid O(n) lock acquisitions during walk
+    with index_lock:
+        meta_snapshot = dict(meta)
+
     # Walk filesystem
     try:
         for root, _, files in os.walk(directory_path, followlinks=False):
@@ -594,14 +603,13 @@ def index_directory(directory_path: str) -> str:
                     continue
                 fp = os.path.normpath(os.path.join(root, f))
 
-                with index_lock:
-                    tracked_info = meta.get(fp)
-                    tracked = tracked_info is not None
-                    tracked_mtime = (
-                        tracked_info.get("mtime", 0)
-                        if isinstance(tracked_info, dict)
-                        else None
-                    )
+                tracked_info = meta_snapshot.get(fp)
+                tracked = tracked_info is not None
+                tracked_mtime = (
+                    tracked_info.get("mtime", 0)
+                    if isinstance(tracked_info, dict)
+                    else None
+                )
 
                 if not tracked:
                     new_files.append(fp)
@@ -844,8 +852,8 @@ def main() -> None:
     # Handle graceful shutdown signals
     def handle_signal(signum, frame):
         log(f"Received signal {signum}. Persisting and shutting down...")
-        # Non-blocking acquire to avoid deadlock if worker holds the lock
-        if index_lock.acquire(blocking=False):
+        # Wait up to 5s for the worker to finish its batch, then persist
+        if index_lock.acquire(timeout=5):
             try:
                 _persist_locked()
             except Exception:
@@ -853,7 +861,7 @@ def main() -> None:
             finally:
                 index_lock.release()
         else:
-            log("WARNING: Index lock held by worker. Skipping persist on shutdown.")
+            log("WARNING: Index lock held by worker for >5s. Shutting down without persist.")
         os._exit(0)
 
     sig_module.signal(sig_module.SIGINT, handle_signal)

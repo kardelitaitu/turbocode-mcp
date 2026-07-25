@@ -1,3 +1,4 @@
+import builtins
 import json
 import os
 import time
@@ -4541,42 +4542,37 @@ class TestEnqueueNonePriority:
 class TestValidateImportsEachPackageMissing:
     """validate_imports exits with correct message for each missing package."""
 
+    @classmethod
+    def _make_fake_import(cls, fail_name: str):
+        real_import = builtins.__import__
+        def fake_import(name, *a, **kw):
+            if name == fail_name:
+                raise ImportError(f"no {fail_name}")
+            return real_import(name, *a, **kw)
+        return fake_import
+
     def test_fastmcp_missing_exits(self, mocker):
-        def fake_import(name, *a, **kw):
-            if name == "fastmcp":
-                raise ImportError("no fastmcp")
-            return object()
-        mocker.patch("builtins.__import__", side_effect=fake_import)
+        mocker.patch("builtins.__import__", side_effect=self._make_fake_import("fastmcp"))
         mock_exit = mocker.patch("sys.exit")
         server.validate_imports()
         mock_exit.assert_called_once_with(1)
 
-    def test_turbovec_missing_exits(self, mocker):
-        def fake_import(name, *a, **kw):
-            if name == "turbovec":
-                raise ImportError("no turbovec")
-            return object()
-        mocker.patch("builtins.__import__", side_effect=fake_import)
+    def test_turbovec_missing_does_not_exit(self, mocker):
+        """turbovec is checked at first-use, not at startup."""
+        mocker.patch("builtins.__import__", side_effect=self._make_fake_import("turbovec"))
         mock_exit = mocker.patch("sys.exit")
         server.validate_imports()
-        mock_exit.assert_called_once_with(1)
+        mock_exit.assert_not_called()
 
-    def test_sentence_transformers_missing_exits(self, mocker):
-        def fake_import(name, *a, **kw):
-            if name == "sentence_transformers":
-                raise ImportError("no sentence_transformers")
-            return object()
-        mocker.patch("builtins.__import__", side_effect=fake_import)
+    def test_sentence_transformers_missing_does_not_exit(self, mocker):
+        """sentence-transformers is checked at first-use, not at startup."""
+        mocker.patch("builtins.__import__", side_effect=self._make_fake_import("sentence_transformers"))
         mock_exit = mocker.patch("sys.exit")
         server.validate_imports()
-        mock_exit.assert_called_once_with(1)
+        mock_exit.assert_not_called()
 
     def test_numpy_missing_exits(self, mocker):
-        def fake_import(name, *a, **kw):
-            if name == "numpy":
-                raise ImportError("no numpy")
-            return object()
-        mocker.patch("builtins.__import__", side_effect=fake_import)
+        mocker.patch("builtins.__import__", side_effect=self._make_fake_import("numpy"))
         mock_exit = mocker.patch("sys.exit")
         server.validate_imports()
         mock_exit.assert_called_once_with(1)
@@ -6225,7 +6221,7 @@ class TestEnsureModelImportFailure:
                 raise ImportError("no module named sentence_transformers")
             return original_import(name, *args, **kw)
         mocker.patch.object(builtins, "__import__", side_effect=fake_import)
-        with pytest.raises(ImportError, match="sentence_transformers"):
+        with pytest.raises(SystemExit):
             server.ensure_model()
 
 

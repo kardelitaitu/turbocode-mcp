@@ -1,0 +1,15 @@
+.git
+.github
+.gitignore
+.venv
+__pycache__
+*.pyc
+node_modules
+tests
+test
+docs
+JOURNAL.md
+AGENTS.md
+CHANGELOG.md
+*.md
+!README.md
