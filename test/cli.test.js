@@ -293,4 +293,25 @@ describe('CLI Wrapper', () => {
     assert.ok(content.includes('.on('));
     assert.ok(content.includes('error'));
   });
+
+  it('should have log function printing to stderr', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes("console.error(`[turbocode-mcp]"));
+  });
+
+  it('should forward child env to preserve PATH', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes('{ ...process.env }'));
+  });
+
+  it('should have a main() function', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes('function main()'));
+    assert.ok(content.includes('main()'));
+  });
+
+  it('should set ROOT_DIR relative to __dirname', () => {
+    const content = fs.readFileSync(CLI, 'utf-8');
+    assert.ok(content.includes("path.join(__dirname, '..')"));
+  });
 });

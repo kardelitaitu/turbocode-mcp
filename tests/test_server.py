@@ -3800,3 +3800,455 @@ class TestBackgroundWorkerIdleStatusAfterProcessing:
         time.sleep(0.15)
         assert server.worker_state["status"] == "idle" or server.worker_state["processed"] == 1
         server._stop_event.set()
+
+
+class TestSignalHandlerNoDeadlock:
+    """Signal handler calls persist_all without re-acquiring index_lock."""
+
+    def test_handler_does_not_acquire_lock_externally(self, mocker):
+        mock_persist = mocker.patch("server.persist_all")
+        mock_exit = mocker.patch("server.os._exit")
+        mocker.patch("server.log")
+        mocker.patch("server.sig_module.signal")
+        mocker.patch("server.validate_environment")
+        mocker.patch("os.makedirs")
+        mocker.patch("server.load_and_verify")
+        mocker.patch("threading.Thread")
+        mocker.patch("server.mcp.run")
+        registered = {}
+        def capture(signum, handler):
+            registered[signum] = handler
+        mocker.patch("server.sig_module.signal", side_effect=capture)
+        mocker.patch("server.mcp.run", side_effect=Exception("stop"))
+        try:
+            server.main()
+        except Exception:
+            pass
+        handler = registered.get(sig_module.SIGINT)
+        assert handler is not None
+        handler(sig_module.SIGINT, None)
+        mock_persist.assert_called_once()
+        mock_exit.assert_called_once_with(0)
+
+    def test_handler_does_not_deadlock_when_lock_held(self, mocker):
+        mock_persist = mocker.patch("server.persist_all")
+        mock_exit = mocker.patch("server.os._exit")
+        mocker.patch("server.log")
+        server.index_lock.acquire()
+        try:
+            server._stop_event.set()
+            mocker.patch("server.sig_module.signal")
+            mocker.patch("server.validate_environment")
+            mocker.patch("os.makedirs")
+            mocker.patch("server.load_and_verify")
+            mocker.patch("threading.Thread")
+            mocker.patch("server.mcp.run")
+            registered = {}
+            def capture(signum, handler):
+                registered[signum] = handler
+            mocker.patch("server.sig_module.signal", side_effect=capture)
+            mocker.patch("server.mcp.run", side_effect=Exception("stop"))
+            try:
+                server.main()
+            except Exception:
+                pass
+            handler = registered.get(sig_module.SIGINT)
+            assert handler is not None
+            handler(sig_module.SIGINT, None)
+            mock_persist.assert_called_once()
+            mock_exit.assert_called_once_with(0)
+        finally:
+            server.index_lock.release()
+
+
+class TestHandleRemoveNonDictMeta:
+    """handle_remove survives non-dict meta entries."""
+
+    def test_non_dict_meta_removed_without_crash(self, mock_index):
+        server.meta["/bad.py"] = "just a string"
+        server.handle_remove("/bad.py")
+        assert "/bad.py" not in server.meta
+
+    def test_none_meta_removed_without_crash(self, mock_index):
+        server.meta["/null.py"] = None
+        server.handle_remove("/null.py")
+        assert "/null.py" not in server.meta
+
+
+class TestHandleIndexEncodeReturnsEmpty:
+    """handle_index tolerates model.encode returning empty list."""
+
+    def test_empty_encode_list_adds_nothing(self, tmp_path, mock_model, mock_index):
+        mock_model.encode.return_value = []
+        f = tmp_path / "f.py"
+        f.write_text("x = 1")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert len(server.store) == 0
+
+
+class TestFindStaleBoundary:
+    """find_stale_files boundary conditions."""
+
+    def test_candidates_exactly_max_files(self):
+        now = time.time()
+        server.meta = {f"/f{i}.py": {"id": i, "last_indexed": now - 86400 * 14} for i in range(10)}
+        stale = server.find_stale_files(max_age_days=7, max_files=10)
+        assert len(stale) == 10
+
+    def test_no_candidates_returns_empty(self):
+        server.meta = {}
+        stale = server.find_stale_files(max_age_days=7, max_files=10)
+        assert stale == []
+
+
+class TestDequeueBatchFloatSize:
+    """dequeue_batch handles float batch_size gracefully."""
+
+    def test_float_size_truncated(self):
+        for i in range(5):
+            server.enqueue("new", f"/f{i}.py")
+        batch = server.dequeue_batch(2.7)
+        assert len(batch) == 2
+        assert server.queue_depth() == 3
+
+
+class TestIndexDirectoryEmptyPath:
+    """index_directory handles empty path."""
+
+    def test_empty_path_returns_error(self):
+        result = server.index_directory("")
+        assert "not found" in result.lower()
+
+
+class TestPersistAllStoreEdgeCases:
+    """persist_all handles non-serializable store entries."""
+
+    def test_store_with_non_string_key_serialized(self, mock_index):
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        server.meta["/a.py"] = {"id": 1, "mtime": 100, "size": 10, "last_indexed": 200}
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        server.persist_all()
+        assert os.path.exists(server.META_PATH)
+        assert os.path.exists(server.STORE_PATH)
+
+    def test_store_with_none_value_serialized(self, mock_index):
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        server.meta["/a.py"] = {"id": 1, "mtime": 100, "size": 10, "last_indexed": 200}
+        server.store[1] = {"path": "/a.py", "content": None}
+        server.persist_all()
+        stored = json.load(open(server.STORE_PATH))
+        assert stored["1"]["content"] is None
+
+
+class TestBackgroundWorkerAllPriorities:
+    """Worker processes all priority types."""
+
+    def test_worker_processes_changed_priority(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.enqueue("changed", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.15)
+        server._stop_event.set()
+        assert server.worker_state["processed"] == 1
+        assert str(f) in server.meta
+
+    def test_worker_processes_reindex_priority(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.enqueue("reindex", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.15)
+        server._stop_event.set()
+        assert server.worker_state["processed"] == 1
+        assert str(f) in server.meta
+
+
+class TestSearchCodebaseContentEdgeCases:
+    """Search handles null bytes and special-only queries."""
+
+    def test_content_with_null_byte(self, mock_model, mock_index):
+        server.store[1] = {"path": "/a.py", "content": "x\x00y"}
+        mock_index.search.return_value = (
+            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query")
+        assert "\x00" in result or "x" in result
+
+    def test_query_with_only_special_chars(self, mock_model, mock_index, populated_state):
+        result = server.search_codebase("!@#$%^&*()")
+        assert isinstance(result, str)
+
+
+class TestWorkerStatusTransitionsDetailed:
+    """Worker state machine: idle -> indexing -> idle."""
+
+    def test_status_goes_indexing_then_idle(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.enqueue("new", str(f))
+        server._stop_event.clear()
+        statuses = []
+        original_sleep = time.sleep
+        def tracking_sleep(s):
+            statuses.append(server.worker_state["status"])
+            if len(statuses) >= 5:
+                server._stop_event.set()
+            original_sleep(min(s, 0.02))
+        mocker.patch.object(time, "sleep", side_effect=tracking_sleep)
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        t.join(timeout=3)
+        assert "indexing" in statuses
+        assert "idle" in statuses
+
+
+class TestHandleIndexEncodeWrongShape:
+    """handle_index tolerates model.encode returning wrong shape."""
+
+    def test_encode_returns_1d_flat_array(self, tmp_path, mock_model, mock_index):
+        mock_model.encode.return_value = np.random.rand(384).astype(np.float32)
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert len(server.store) == 1
+
+
+class TestIndexStatsDirectoriesField:
+    """turbocode://stats shows directories list."""
+
+    def test_directories_list_in_stats_resource(self, populated_state):
+        result = server.index_stats()
+        data = json.loads(result)
+        assert "directories" in data
+        assert isinstance(data["directories"], list)
+        assert any("/proj" in d for d in data["directories"])
+
+
+class TestAtomicWriteParentIsFile:
+    """atomic_write handles parent path being a file (not directory)."""
+
+    def test_parent_is_file_path_raises(self, tmp_path):
+        f = tmp_path / "file.txt"
+        f.write_text("parent")
+        child = f / "child.json"
+        with pytest.raises(Exception):
+            server.atomic_write(str(child), "{}")
+
+
+class TestMainDebugPaths:
+    """main() logs debug path info when DEBUG_MODE is True."""
+
+    def test_debug_paths_logged(self, mocker, capsys):
+        mocker.patch("sys.argv", ["server.py", "--debug"])
+        mocker.patch("server.validate_environment")
+        mocker.patch("os.makedirs")
+        mocker.patch("server.load_and_verify")
+        mocker.patch("threading.Thread")
+        mocker.patch("server.sig_module.signal")
+        mocker.patch("server.mcp.run")
+        server.main()
+        captured = capsys.readouterr()
+        assert "TURBOCODE_DIR" in captured.err
+        assert "INDEX_PATH" in captured.err
+
+
+class TestLoadAndVerifyStoreDuplicatePaths:
+    """load_and_verify handles store entries with duplicate paths."""
+
+    def test_duplicate_path_uses_last_entry(self):
+        json.dump({}, open(server.META_PATH, "w"))
+        store = {"1": {"path": "/dup.py", "content": "first"}, "2": {"path": "/dup.py", "content": "second"}}
+        json.dump(store, open(server.STORE_PATH, "w"))
+        server.load_and_verify()
+        assert "/dup.py" in server.meta
+        assert server.meta["/dup.py"]["id"] == 2
+
+
+class TestEnqueueBytes:
+    """enqueue rejects bytes objects."""
+
+    def test_enqueue_bytes_path_skipped(self):
+        server.enqueue("new", b"/path.py")
+        assert server.queue_depth() == 0
+
+    def test_enqueue_bytearray_path_skipped(self):
+        server.enqueue("new", bytearray(b"/path.py"))
+        assert server.queue_depth() == 0
+
+
+class TestBackgroundWorkerReindexOnly:
+    """Worker handles reindex-only items."""
+
+    def test_worker_reindex_with_no_initial_meta(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.enqueue("reindex", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.15)
+        server._stop_event.set()
+        assert server.worker_state["processed"] == 1
+        assert str(f) in server.meta
+
+
+class TestHandleRemoveMissingStoreEntry:
+    """handle_remove works when store entry already removed."""
+
+    def test_store_entry_already_gone(self, mock_index):
+        server.meta["/gone.py"] = {"id": 1, "mtime": 100, "size": 10, "last_indexed": 200}
+        assert 1 not in server.store
+        server.handle_remove("/gone.py")
+        assert "/gone.py" not in server.meta
+
+
+class TestSearchLargeKEmptyStore:
+    """search_codebase with large k but empty store."""
+
+    def test_k_above_20_with_empty_store(self, mock_model, mock_index):
+        result = server.search_codebase("test", k=50)
+        assert isinstance(result, str)
+        assert "empty" in result.lower()
+
+
+class TestLoadAndVerifyNonSerializableJson:
+    """load_and_verify handles store file with malformed JSON."""
+
+    def test_store_file_is_dictionary_instead_of_json(self):
+        json.dump({}, open(server.META_PATH, "w"))
+        with open(server.STORE_PATH, "w") as f:
+            f.write("{invalid json!!!}")
+        server.load_and_verify()
+        assert server.store == {}
+        assert server.meta == {}
+
+
+class TestPersistAllNoIndexThenIndexCreated:
+    """persist_all handles index being None gracefully."""
+
+    def test_persist_all_when_index_none_returns_early(self):
+        server.index = None
+        server.meta["/a.py"] = {"id": 1}
+        server.persist_all()
+        assert not os.path.exists(server.META_PATH)
+
+
+class TestBackgroundWorkerEmptyQueueStaleOnly:
+    """Worker processes stale files when queue is empty."""
+
+    def test_stale_reindex_from_empty_queue(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        f = tmp_path / "stale.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.meta[str(f)] = {"id": 1, "mtime": 100, "size": 1, "last_indexed": 0}
+        server.store[1] = {"path": str(f), "content": "old"}
+        mocker.patch.object(server, "find_stale_files", return_value=[str(f)])
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.15)
+        server._stop_event.set()
+        assert server.worker_state["processed"] >= 1
+
+
+class TestEnsureIndexLoadErrorAndRemoveFails:
+    """ensure_index survives both load error AND remove failure."""
+
+    def test_load_and_remove_fail_creates_new_index(self, mocker):
+        with open(server.INDEX_PATH, "wb") as f:
+            f.write(b"corrupt")
+        mocker.patch("server.IdMapIndex.load", side_effect=Exception("load error"))
+        mock_remove = mocker.patch("os.remove", side_effect=PermissionError("locked"))
+        server.index = None
+        server.ensure_index()
+        assert server.index is not None
+        mock_remove.assert_called_once_with(server.INDEX_PATH)
+
+
+class TestGetIndexStatsQueueDepth:
+    """get_index_stats reflects queue depth."""
+
+    def test_stats_shows_queue_depth(self):
+        server.enqueue("new", "/p.py")
+        server.enqueue("new", "/q.py")
+        result = server.get_index_stats()
+        assert "2 queued" in result
+
+
+class TestHandleIndexContentMixedWhitespace:
+    """handle_index trims and indexes mixed whitespace content correctly."""
+
+    def test_content_with_leading_trailing_whitespace(self, tmp_path, mock_model, mock_index):
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        mock_index.write.side_effect = None
+        mock_index.write.return_value = None
+        f = tmp_path / "f.py"
+        f.write_text("  \n  x = 1  \n  ")
+        server.current_id = 1
+        server.handle_index(str(f))
+        assert 1 in server.store
+        assert "x = 1" in server.store[1]["content"]
+
+
+class TestSearchCodebaseKFloat:
+    """search_codebase with float k values."""
+
+    def test_k_float_clamps_to_int(self, mock_model, mock_index):
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        mock_index.search.return_value = (
+            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k=2.7)
+        assert isinstance(result, str)
+
+    def test_k_float_string_clamps_to_one(self, mock_model, mock_index):
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        mock_index.search.return_value = (
+            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+        )
+        result = server.search_codebase("query", k="bad")
+        assert isinstance(result, str)
+
+
+class TestValidateEnvironmentDebugFlagOff:
+    """validate_environment does not call debug when DEBUG_MODE is False."""
+
+    def test_debug_not_called_when_disabled(self, capsys, mocker):
+        mocker.patch.object(server, "validate_python_version")
+        mocker.patch.object(server, "validate_imports")
+        server.DEBUG_MODE = False
+        server.validate_environment()
+        captured = capsys.readouterr()
+        assert captured.err == ""

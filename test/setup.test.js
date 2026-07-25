@@ -169,4 +169,28 @@ describe('Setup Script', () => {
     const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
     assert.ok(content.includes("'py'"));
   });
+
+  it('should have run() helper with execSync and error handling', () => {
+    const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
+    assert.ok(content.includes('function run('));
+    assert.ok(content.includes('execSync'));
+    assert.ok(content.includes('process.exit(1)'));
+  });
+
+  it('should self-execute main() at module end', () => {
+    const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
+    assert.ok(content.includes('main()'));
+  });
+
+  it('should use venv pip not system-wide pip', () => {
+    const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
+    assert.ok(content.includes('pip.exe') || content.includes('pip'));
+    assert.ok(content.includes('VENV_DIR'));
+  });
+
+  it('should have log and error function distinction', () => {
+    const content = fs.readFileSync(SETUP_SCRIPT, 'utf-8');
+    assert.ok(content.includes('console.error(`[turbocode-mcp] ERROR'));
+    assert.ok(content.includes('console.log(`[turbocode-mcp]'));
+  });
 });

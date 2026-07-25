@@ -807,15 +807,10 @@ def main() -> None:
     # Handle graceful shutdown signals
     def handle_signal(signum, frame):
         log(f"Received signal {signum}. Persisting and shutting down...")
-        if index_lock.acquire(blocking=False):
-            try:
-                persist_all()
-            except Exception:
-                pass
-            finally:
-                index_lock.release()
-        else:
-            log("WARNING: Index lock held by worker. Skipping persist on shutdown.")
+        try:
+            persist_all()
+        except Exception:
+            pass
         os._exit(0)
 
     sig_module.signal(sig_module.SIGINT, handle_signal)
