@@ -1,0 +1,595 @@
+"""
+TurboCode MCP — Local codebase vector search MCP server.
+
+Powered by FastMCP, Turbovec, and sentence-transformers.
+Fully local, no cloud, no API keys.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import json
+import time
+import threading
+from collections import deque
+
+import numpy as np
+from fastmcp import FastMCP
+from sentence_transformers import SentenceTransformer
+from turbovec import IdMapIndex
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 2.1 — Constants & Global State
+# ═══════════════════════════════════════════════════════════════
+
+TURBOCODE_DIR = os.path.join(os.path.expanduser("~"), ".turbocode")
+INDEX_PATH = os.path.join(TURBOCODE_DIR, "index.tvim")
+META_PATH = os.path.join(TURBOCODE_DIR, "meta.json")
+STORE_PATH = os.path.join(TURBOCODE_DIR, "store.json")
+
+BATCH_SIZE = 5
+BATCH_INTERVAL = 1.0  # seconds
+IDLE_TIMEOUT = 30 * 60  # 30 minutes
+CHECK_INTERVAL = 60  # seconds between idle checks
+
+# Lazy-loaded globals
+model: SentenceTransformer | None = None
+index: IdMapIndex | None = None
+meta: dict[str, dict] = {}
+store: dict[int, dict] = {}
+current_id: int = 0
+last_activity: float = 0.0
+
+# Thread-safe queue
+index_queue: deque = deque()
+queue_lock = threading.Lock()
+index_lock = threading.Lock()
+
+worker_state = {
+    "status": "idle",
+    "queue_depth": 0,
+    "processed": 0,
+    "errors": 0,
+    "last_error": None,
+}
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 2.2 — Logging (stderr only; stdout is MCP transport)
+# ═══════════════════════════════════════════════════════════════
+
+
+def log(msg: str) -> None:
+    """Log a message to stderr. stdout is reserved for MCP protocol."""
+    print(f"[TurboCode MCP] {msg}", file=sys.stderr, flush=True)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 2.3 — Lazy Loading Helpers
+# ═══════════════════════════════════════════════════════════════
+
+
+def ensure_model() -> None:
+    """Load the embedding model on first use."""
+    global model
+    if model is not None:
+        return
+    log("Loading embedding model (first call)...")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
+
+def ensure_index() -> None:
+    """Load the turbovec index from disk or create an empty one."""
+    global index
+    if index is not None:
+        return
+    if os.path.exists(INDEX_PATH):
+        try:
+            log("Loading index from disk...")
+            index = IdMapIndex.load(INDEX_PATH)
+        except Exception as e:
+            log(f"WARNING: Failed to load index ({e}). Creating empty.")
+            try:
+                os.remove(INDEX_PATH)
+            except Exception:
+                pass
+            index = IdMapIndex(dim=384, bit_width=4)
+    else:
+        log("Creating new empty index.")
+        index = IdMapIndex(dim=384, bit_width=4)
+
+
+def ensure_resources() -> None:
+    """Load both model and index on first use."""
+    ensure_model()
+    ensure_index()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 2.4 — Atomic Persistence
+# ═══════════════════════════════════════════════════════════════
+
+
+def atomic_write(path: str, data: str) -> None:
+    """Write data to a file atomically using temp file + rename."""
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
+
+
+def persist_all() -> None:
+    """Save index, meta, and store to disk atomically."""
+    os.makedirs(TURBOCODE_DIR, exist_ok=True)
+
+    with index_lock:
+        # Index
+        index.write(INDEX_PATH + ".tmp")
+        os.replace(INDEX_PATH + ".tmp", INDEX_PATH)
+
+        # Meta
+        atomic_write(META_PATH, json.dumps(meta, indent=2, default=str))
+
+        # Store (convert int keys to strings for JSON)
+        store_serializable = {str(k): v for k, v in store.items()}
+        atomic_write(STORE_PATH, json.dumps(store_serializable, indent=2, default=str))
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 2.5 — Cold-Start Recovery
+# ═══════════════════════════════════════════════════════════════
+
+
+def load_and_verify() -> None:
+    """Load meta/store from disk and check for crash-induced inconsistencies."""
+    global meta, store, current_id
+
+    # Load meta
+    if os.path.exists(META_PATH):
+        try:
+            with open(META_PATH, encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception as e:
+            log(f"WARNING: Corrupt meta.json ({e}). Starting fresh.")
+            meta = {}
+
+    # Load store
+    if os.path.exists(STORE_PATH):
+        try:
+            with open(STORE_PATH, encoding="utf-8") as f:
+                store = {int(k): v for k, v in json.load(f).items()}
+        except Exception as e:
+            log(f"WARNING: Corrupt store.json ({e}). Starting fresh.")
+            store = {}
+
+    meta_count = len(meta)
+    store_count = len(store)
+
+    if meta_count == 0 and store_count == 0:
+        current_id = 1
+        return
+
+    if meta_count != store_count:
+        log(f"WARNING: Inconsistency detected (meta={meta_count} vs store={store_count}). "
+            f"Rebuilding meta from store.")
+        new_meta = {}
+        for id_val, doc in store.items():
+            new_meta[doc["path"]] = {
+                "id": id_val,
+                "mtime": doc.get("mtime", 0),
+                "size": doc.get("size", 0),
+                "last_indexed": doc.get("last_indexed", 0),
+            }
+        meta.clear()
+        meta.update(new_meta)
+        atomic_write(META_PATH, json.dumps(meta, indent=2, default=str))
+
+    current_id = max(store.keys(), default=0) + 1
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 3.1 — Queue Management
+# ═══════════════════════════════════════════════════════════════
+
+
+def enqueue(priority: str, file_path: str) -> None:
+    """Thread-safe enqueue with its own lock."""
+    with queue_lock:
+        index_queue.append((priority, file_path))
+
+
+def dequeue_batch(batch_size: int = BATCH_SIZE) -> list[tuple[str, str]]:
+    """Thread-safe priority dequeue. Returns up to batch_size items."""
+    with queue_lock:
+        if not index_queue:
+            return []
+
+        priority_order = {"remove": 0, "new": 1, "changed": 2, "reindex": 3}
+        index_queue.sort(key=lambda x: priority_order.get(x[0], 99))
+
+        batch = []
+        for _ in range(min(batch_size, len(index_queue))):
+            batch.append(index_queue.popleft())
+    return batch
+
+
+def queue_depth() -> int:
+    """Thread-safe queue size check."""
+    with queue_lock:
+        return len(index_queue)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 3.3 — File Removal
+# ═══════════════════════════════════════════════════════════════
+
+
+def handle_remove(file_path: str) -> None:
+    """Remove a deleted file from the index. Lock only for mutations."""
+    if file_path not in meta:
+        return
+
+    with index_lock:
+        if file_path not in meta:
+            return
+        file_id = meta[file_path]["id"]
+        try:
+            index.remove(file_id)
+        except Exception:
+            pass
+        store.pop(file_id, None)
+        del meta[file_path]
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 3.2 — File Indexing
+# ═══════════════════════════════════════════════════════════════
+
+
+def handle_index(file_path: str) -> None:
+    """Index a file. I/O and embedding outside lock. Lock only for mutations."""
+    global current_id
+
+    # I/O: no lock needed
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except Exception:
+        log(f"WARNING: Cannot read {file_path}. Skipping.")
+        return
+
+    chunk = content[:2000].strip()
+    if not chunk:
+        return
+
+    # CPU: no lock needed
+    embedding = model.encode([chunk])
+
+    # Critical section: lock only for mutations
+    with index_lock:
+        # Remove old entry if re-indexing
+        if file_path in meta:
+            old_id = meta[file_path]["id"]
+            try:
+                index.remove(old_id)
+            except Exception:
+                pass
+            store.pop(old_id, None)
+
+        file_id = current_id
+        current_id += 1
+        index.add_with_ids(embedding, np.array([file_id], dtype=np.uint64))
+        store[file_id] = {"path": file_path, "content": chunk}
+        meta[file_path] = {
+            "id": file_id,
+            "mtime": os.path.getmtime(file_path),
+            "size": os.path.getsize(file_path),
+            "last_indexed": time.time(),
+        }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 3.5 — Stale File Detection
+# ═══════════════════════════════════════════════════════════════
+
+
+def find_stale_files(max_age_days: int = 7, max_files: int = 10) -> list[str]:
+    """Pick up to max_files files not re-indexed recently.
+    Uses random sampling to avoid sorting all tracked files.
+    """
+    import random
+
+    cutoff = time.time() - (max_age_days * 86400)
+
+    with index_lock:
+        candidates = [
+            path
+            for path, info in meta.items()
+            if info.get("last_indexed", 0) < cutoff
+        ]
+
+    if not candidates:
+        return []
+    if len(candidates) <= max_files:
+        return candidates
+    return random.sample(candidates, max_files)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 3.4 — Background Worker Loop
+# ═══════════════════════════════════════════════════════════════
+
+
+def background_worker() -> None:
+    """Daemon thread: process index queue in small batches."""
+    while True:
+        batch = dequeue_batch(BATCH_SIZE)
+
+        # If queue is empty, check for stale files
+        if not batch:
+            stale = find_stale_files()
+            if stale:
+                with queue_lock:
+                    for f in stale:
+                        index_queue.append(("reindex", f))
+                batch = dequeue_batch(BATCH_SIZE)
+
+        if not batch:
+            time.sleep(BATCH_INTERVAL)
+            continue
+
+        # Process each file — I/O and CPU outside lock
+        for priority, file_path in batch:
+            try:
+                if priority == "remove":
+                    handle_remove(file_path)
+                else:
+                    handle_index(file_path)
+            except Exception as e:
+                log(f"ERROR: Failed to process {file_path}: {e}")
+                worker_state["errors"] += 1
+                worker_state["last_error"] = str(e)
+
+        # Persist after each batch
+        persist_all()
+
+        time.sleep(BATCH_INTERVAL)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 4.3 — Idle Watchdog
+# ═══════════════════════════════════════════════════════════════
+
+
+def touch() -> None:
+    """Reset the idle timer. Call on every tool/resource invocation."""
+    global last_activity
+    last_activity = time.time()
+
+
+def idle_watchdog() -> None:
+    """Daemon thread: exit process if idle too long."""
+    while True:
+        time.sleep(CHECK_INTERVAL)
+        if time.time() - last_activity > IDLE_TIMEOUT:
+            persist_all()
+            log(f"Idle for {IDLE_TIMEOUT // 60} minutes. "
+                f"Shutting down to free resources. "
+                f"Will restart automatically when needed.")
+            os._exit(0)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 2.6 — FastMCP Registration
+# ═══════════════════════════════════════════════════════════════
+
+mcp = FastMCP("TurboCode MCP")
+
+
+# ── Tools ──
+
+
+@mcp.tool
+def index_directory(directory_path: str) -> str:
+    """Scan and queue files for background indexing."""
+    touch()
+
+    if not os.path.exists(directory_path):
+        return f"Error: Directory '{directory_path}' not found."
+
+    ensure_resources()
+
+    new_files: list[str] = []
+    changed_files: list[str] = []
+    removed_files: list[str] = []
+
+    # Walk filesystem
+    for root, _, files in os.walk(directory_path):
+        for f in files:
+            if not f.endswith((".py", ".rs", ".md", ".txt")):
+                continue
+            fp = os.path.join(root, f)
+
+            with index_lock:
+                if fp not in meta:
+                    new_files.append(fp)
+                else:
+                    file_mtime = os.path.getmtime(fp)
+                    if meta[fp]["mtime"] != file_mtime:
+                        changed_files.append(fp)
+
+    # Detect removed files
+    with index_lock:
+        for tracked_path in list(meta.keys()):
+            if tracked_path.startswith(directory_path) and not os.path.exists(tracked_path):
+                removed_files.append(tracked_path)
+
+    # Enqueue
+    for f in removed_files:
+        enqueue("remove", f)
+    for f in changed_files:
+        enqueue("changed", f)
+    for f in new_files:
+        enqueue("new", f)
+
+    # Build response
+    parts = []
+    if new_files:
+        parts.append(f"{len(new_files)} new")
+    if changed_files:
+        parts.append(f"{len(changed_files)} changed")
+    if removed_files:
+        parts.append(f"{len(removed_files)} to remove")
+
+    if not parts:
+        tracked_here = sum(1 for p in meta if p.startswith(directory_path))
+        return f"All {tracked_here} files up to date."
+
+    total = len(new_files) + len(changed_files) + len(removed_files)
+    return f"Queued {total} files ({', '.join(parts)}) for indexing."
+
+
+@mcp.tool
+def search_codebase(query: str, k: int = 3) -> str:
+    """Search indexed code for semantically similar content."""
+    touch()
+
+    # Clamp k
+    if k < 1:
+        k = 1
+    elif k > 20:
+        k = 20
+
+    with index_lock:
+        if not store:
+            return "Index is empty. Use index_directory() to index a codebase first."
+
+    ensure_resources()
+
+    query_vec = model.encode([query])
+
+    with index_lock:
+        scores, ids = index.search(query_vec, k=k)
+
+    results: list[str] = []
+    for score, doc_id in zip(scores[0], ids[0]):
+        with index_lock:
+            doc = store.get(int(doc_id))
+        if doc:
+            results.append(
+                f"**{doc['path']}** (score: {score:.4f})\n"
+                f"```\n{doc['content'][:500]}...\n```"
+            )
+
+    if not results:
+        remaining = queue_depth()
+        hint = f"\n*Note: {remaining} files still queued.*" if remaining else ""
+        return f"No results found for '{query}'.{hint}"
+
+    return "\n\n---\n\n".join(results)
+
+
+@mcp.tool
+def get_index_stats() -> str:
+    """Return index statistics. Never loads model/index."""
+    touch()
+
+    tvim_size = os.path.getsize(INDEX_PATH) if os.path.exists(INDEX_PATH) else 0
+
+    with index_lock:
+        vcount = len(store)
+        fcount = len(meta)
+
+    qdepth = queue_depth()
+    dirs = set(os.path.dirname(p) for p in meta)
+
+    return (
+        f"**Index Stats**\n"
+        f"- Vectors: {vcount}\n"
+        f"- Files tracked: {fcount}\n"
+        f"- Directories: {len(dirs)}\n"
+        f"- Disk: {tvim_size / 1024:.1f} KB\n"
+        f"- Worker: {worker_state['status']} "
+        f"({qdepth} queued, {worker_state['processed']} processed, "
+        f"{worker_state['errors']} errors)\n"
+        f"- Model loaded: {model is not None}"
+    )
+
+
+# ── Resources ──
+
+
+@mcp.resource("turbocode://status")
+def index_status() -> str:
+    """Current indexer status. Lightweight — no model/index load."""
+    touch()
+
+    qdepth = queue_depth()
+    tracked = len(meta)
+
+    if model is None and index is None:
+        return f"Ready. {tracked} files tracked. (Model loaded on demand)"
+    elif qdepth > 0:
+        return f"Indexing... {qdepth} queued, {worker_state['processed']} processed."
+    else:
+        return f"Idle. {worker_state['processed']} files indexed."
+
+
+@mcp.resource("turbocode://stats")
+def index_stats() -> str:
+    """Detailed index statistics as JSON. Lightweight — no model/index load."""
+    touch()
+
+    tvim_size = os.path.getsize(INDEX_PATH) if os.path.exists(INDEX_PATH) else 0
+
+    with index_lock:
+        vcount = len(store)
+        fcount = len(meta)
+
+    dirs = list(set(os.path.dirname(p) for p in meta))
+    qdepth = queue_depth()
+
+    stats = {
+        "vectors": vcount,
+        "files_tracked": fcount,
+        "directories": dirs,
+        "disk_size_kb": round(tvim_size / 1024, 1),
+        "queue_depth": qdepth,
+        "state": worker_state["status"],
+        "processed": worker_state["processed"],
+        "errors": worker_state["errors"],
+        "last_error": worker_state["last_error"],
+        "model_loaded": model is not None,
+        "model": "all-MiniLM-L6-v2",
+    }
+    return json.dumps(stats, indent=2)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Startup
+# ═══════════════════════════════════════════════════════════════
+
+
+def main() -> None:
+    global meta, store, current_id
+
+    os.makedirs(TURBOCODE_DIR, exist_ok=True)
+
+    # Load and verify consistency of persisted data
+    load_and_verify()
+
+    # Start background threads
+    threading.Thread(target=background_worker, daemon=True).start()
+    threading.Thread(target=idle_watchdog, daemon=True).start()
+
+    log(f"Ready. {len(meta)} files tracked. "
+        f"Model/index loaded on demand. "
+        f"Idle timeout: {IDLE_TIMEOUT // 60}m.")
+
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()
