@@ -1,32 +1,3 @@
-# ── Python ──
-.venv/
-venv/
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-dist/
-build/
-
-# ── Node / npm ──
-node_modules/
-npm-debug.log*
-.yarn/
-
-# ── TurboCode MCP runtime data ──
-.turbocode/
-
-# ── OS files ──
-.DS_Store
-Thumbs.db
-nul
-
-# ── IDE / Editor ──
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Agent instructions
-AGENTS.md
+pytest_out.txt
+stderr.txt
+test_output.txt

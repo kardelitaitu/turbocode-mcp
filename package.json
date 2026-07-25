@@ -7,7 +7,12 @@
     "turbocode-mcp": "./bin/cli.js"
   },
   "scripts": {
-    "postinstall": "node ./scripts/setup.js"
+    "postinstall": "node ./scripts/setup.js",
+    "test": "npm run test:py && npm run test:js",
+    "test:all": "npm run test:py && npm run test:js && npm run test:integration",
+    "test:py": ".venv\\Scripts\\python.exe -m pytest tests/test_server.py -q",
+    "test:js": "node --test test\\cli.test.js test\\setup.test.js",
+    "test:integration": ".venv\\Scripts\\python.exe -m pytest tests/test_integration.py -v"
   },
   "engines": {
     "node": ">=18"

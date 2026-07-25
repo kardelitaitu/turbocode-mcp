@@ -11,12 +11,13 @@ import os
 import sys
 import json
 import time
+import random
+import signal as sig_module
 import threading
 from collections import deque
 
 import numpy as np
 from fastmcp import FastMCP
-from sentence_transformers import SentenceTransformer
 from turbovec import IdMapIndex
 
 # ═══════════════════════════════════════════════════════════════
@@ -45,6 +46,8 @@ last_activity: float = 0.0
 index_queue: deque = deque()
 queue_lock = threading.Lock()
 index_lock = threading.Lock()
+load_lock = threading.Lock()  # Guards ensure_model/ensure_index (lazy loading)
+_stop_event = threading.Event()  # Signal to stop background threads (used by tests)
 
 worker_state = {
     "status": "idle",
@@ -79,33 +82,40 @@ def debug(msg: str) -> None:
 
 
 def ensure_model() -> None:
-    """Load the embedding model on first use."""
+    """Load the embedding model on first use (thread-safe)."""
     global model
     if model is not None:
         return
-    log("Loading embedding model (first call)...")
-    model = SentenceTransformer("all-MiniLM-L6-v2")
+    with load_lock:
+        if model is not None:
+            return
+        from sentence_transformers import SentenceTransformer
+        log("Loading embedding model (first call)...")
+        model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 def ensure_index() -> None:
-    """Load the turbovec index from disk or create an empty one."""
+    """Load the turbovec index from disk or create an empty one (thread-safe)."""
     global index
     if index is not None:
         return
-    if os.path.exists(INDEX_PATH):
-        try:
-            log("Loading index from disk...")
-            index = IdMapIndex.load(INDEX_PATH)
-        except Exception as e:
-            log(f"WARNING: Failed to load index ({e}). Creating empty.")
+    with load_lock:
+        if index is not None:
+            return
+        if os.path.exists(INDEX_PATH):
             try:
-                os.remove(INDEX_PATH)
-            except Exception:
-                pass
+                log("Loading index from disk...")
+                index = IdMapIndex.load(INDEX_PATH)
+            except Exception as e:
+                log(f"WARNING: Failed to load index ({e}). Creating empty.")
+                try:
+                    os.remove(INDEX_PATH)
+                except Exception:
+                    pass
+                index = IdMapIndex(dim=384, bit_width=4)
+        else:
+            log("Creating new empty index.")
             index = IdMapIndex(dim=384, bit_width=4)
-    else:
-        log("Creating new empty index.")
-        index = IdMapIndex(dim=384, bit_width=4)
 
 
 def ensure_resources() -> None:
@@ -161,28 +171,53 @@ def validate_environment() -> None:
 def atomic_write(path: str, data: str) -> None:
     """Write data to a file atomically using temp file + rename."""
     tmp_path = path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+        raise
 
 
 def persist_all() -> None:
     """Save index, meta, and store to disk atomically."""
-    os.makedirs(TURBOCODE_DIR, exist_ok=True)
+    try:
+        os.makedirs(TURBOCODE_DIR, exist_ok=True)
+    except Exception as e:
+        log(f"WARNING: Cannot create {TURBOCODE_DIR}: {e}")
+        return
 
     with index_lock:
-        # Index
-        index.write(INDEX_PATH + ".tmp")
-        os.replace(INDEX_PATH + ".tmp", INDEX_PATH)
+        if index is None:
+            debug("persist_all: index not loaded, nothing to persist.")
+            return
+
+        # Index (atomic via temp file + replace)
+        try:
+            index.write(INDEX_PATH + ".tmp")
+            os.replace(INDEX_PATH + ".tmp", INDEX_PATH)
+        except Exception as e:
+            log(f"WARNING: Failed to persist index: {e}")
+            return
 
         # Meta
-        atomic_write(META_PATH, json.dumps(meta, indent=2, default=str))
+        try:
+            atomic_write(META_PATH, json.dumps(meta, indent=2, default=str))
+        except Exception as e:
+            log(f"WARNING: Failed to persist meta: {e}")
 
         # Store (convert int keys to strings for JSON)
-        store_serializable = {str(k): v for k, v in store.items()}
-        atomic_write(STORE_PATH, json.dumps(store_serializable, indent=2, default=str))
+        try:
+            store_serializable = {str(k): v for k, v in store.items()}
+            atomic_write(STORE_PATH, json.dumps(store_serializable, indent=2, default=str))
+        except Exception as e:
+            log(f"WARNING: Failed to persist store: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -224,7 +259,10 @@ def load_and_verify() -> None:
             f"Rebuilding meta from store.")
         new_meta = {}
         for id_val, doc in store.items():
-            new_meta[doc["path"]] = {
+            file_path = doc.get("path")
+            if not file_path:
+                continue
+            new_meta[file_path] = {
                 "id": id_val,
                 "mtime": doc.get("mtime", 0),
                 "size": doc.get("size", 0),
@@ -255,11 +293,13 @@ def dequeue_batch(batch_size: int = BATCH_SIZE) -> list[tuple[str, str]]:
             return []
 
         priority_order = {"remove": 0, "new": 1, "changed": 2, "reindex": 3}
-        index_queue.sort(key=lambda x: priority_order.get(x[0], 99))
+        items = list(index_queue)
+        items.sort(key=lambda x: priority_order.get(x[0], 99))
+        index_queue.clear()
 
-        batch = []
-        for _ in range(min(batch_size, len(index_queue))):
-            batch.append(index_queue.popleft())
+        batch = items[:batch_size]
+        remaining = items[batch_size:]
+        index_queue.extend(remaining)
     return batch
 
 
@@ -277,6 +317,9 @@ def queue_depth() -> int:
 def handle_remove(file_path: str) -> None:
     """Remove a deleted file from the index. Lock only for mutations."""
     if file_path not in meta:
+        return
+
+    if index is None:
         return
 
     with index_lock:
@@ -299,6 +342,10 @@ def handle_remove(file_path: str) -> None:
 def handle_index(file_path: str) -> None:
     """Index a file. I/O and embedding outside lock. Lock only for mutations."""
     global current_id
+
+    if model is None or index is None:
+        log(f"WARNING: Model or index not loaded. Skipping {file_path}.")
+        return
 
     # I/O: no lock needed
     try:
@@ -326,14 +373,21 @@ def handle_index(file_path: str) -> None:
                 pass
             store.pop(old_id, None)
 
+        try:
+            mtime = os.path.getmtime(file_path)
+            size = os.path.getsize(file_path)
+        except Exception:
+            log(f"WARNING: Cannot stat {file_path} after reading. Skipping.")
+            return
+
         file_id = current_id
         current_id += 1
         index.add_with_ids(embedding, np.array([file_id], dtype=np.uint64))
         store[file_id] = {"path": file_path, "content": chunk}
         meta[file_path] = {
             "id": file_id,
-            "mtime": os.path.getmtime(file_path),
-            "size": os.path.getsize(file_path),
+            "mtime": mtime,
+            "size": size,
             "last_indexed": time.time(),
         }
 
@@ -347,8 +401,6 @@ def find_stale_files(max_age_days: int = 7, max_files: int = 10) -> list[str]:
     """Pick up to max_files files not re-indexed recently.
     Uses random sampling to avoid sorting all tracked files.
     """
-    import random
-
     cutoff = time.time() - (max_age_days * 86400)
 
     with index_lock:
@@ -372,7 +424,9 @@ def find_stale_files(max_age_days: int = 7, max_files: int = 10) -> list[str]:
 
 def background_worker() -> None:
     """Daemon thread: process index queue in small batches."""
-    while True:
+    interval = max(BATCH_INTERVAL, 0.1)  # prevent busy-loop
+
+    while not _stop_event.is_set():
         batch = dequeue_batch(BATCH_SIZE)
 
         # If queue is empty, check for stale files
@@ -385,8 +439,11 @@ def background_worker() -> None:
                 batch = dequeue_batch(BATCH_SIZE)
 
         if not batch:
-            time.sleep(BATCH_INTERVAL)
+            worker_state["status"] = "idle"
+            time.sleep(interval)
             continue
+
+        worker_state["status"] = "indexing"
 
         # Process each file — I/O and CPU outside lock
         for priority, file_path in batch:
@@ -396,6 +453,7 @@ def background_worker() -> None:
                     handle_remove(file_path)
                 else:
                     handle_index(file_path)
+                worker_state["processed"] += 1
             except Exception as e:
                 log(f"ERROR: Failed to process {file_path}: {e}")
                 worker_state["errors"] += 1
@@ -403,9 +461,14 @@ def background_worker() -> None:
 
         # Persist after each batch
         debug(f"Batch complete. Persisting...")
-        persist_all()
+        try:
+            persist_all()
+        except Exception as e:
+            log(f"ERROR: Failed to persist index: {e}")
+            worker_state["errors"] += 1
+            worker_state["last_error"] = str(e)
 
-        time.sleep(BATCH_INTERVAL)
+        time.sleep(interval)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -421,10 +484,15 @@ def touch() -> None:
 
 def idle_watchdog() -> None:
     """Daemon thread: exit process if idle too long."""
-    while True:
+    while not _stop_event.is_set():
         time.sleep(CHECK_INTERVAL)
+        if _stop_event.is_set():
+            return
         if time.time() - last_activity > IDLE_TIMEOUT:
-            persist_all()
+            try:
+                persist_all()
+            except Exception:
+                log("WARNING: Failed to persist state during idle shutdown.")
             log(f"Idle for {IDLE_TIMEOUT // 60} minutes. "
                 f"Shutting down to free resources. "
                 f"Will restart automatically when needed.")
@@ -448,6 +516,8 @@ def index_directory(directory_path: str) -> str:
 
     if not os.path.exists(directory_path):
         return f"Error: Directory '{directory_path}' not found."
+    if not os.path.isdir(directory_path):
+        return f"Error: '{directory_path}' is a file, not a directory."
 
     ensure_resources()
 
@@ -455,26 +525,36 @@ def index_directory(directory_path: str) -> str:
     changed_files: list[str] = []
     removed_files: list[str] = []
 
-    # Walk filesystem
-    for root, _, files in os.walk(directory_path):
-        for f in files:
-            if not f.endswith((".py", ".rs", ".md", ".txt")):
-                continue
-            fp = os.path.join(root, f)
+    SUPPORTED_EXT = (".py", ".rs", ".md", ".txt")
 
-            with index_lock:
-                if fp not in meta:
+    # Walk filesystem
+    try:
+        for root, _, files in os.walk(directory_path):
+            for f in files:
+                if not f.lower().endswith(SUPPORTED_EXT):
+                    continue
+                fp = os.path.join(root, f)
+
+                with index_lock:
+                    tracked = fp in meta
+                    tracked_info = meta.get(fp) if tracked else None
+                    tracked_mtime = tracked_info.get("mtime", 0) if tracked_info else None
+
+                if not tracked:
                     new_files.append(fp)
                 else:
                     file_mtime = os.path.getmtime(fp)
-                    if meta[fp]["mtime"] != file_mtime:
+                    if tracked_mtime != file_mtime:
                         changed_files.append(fp)
+    except PermissionError:
+        return f"Error: Permission denied reading directory '{directory_path}'."
 
     # Detect removed files
     with index_lock:
-        for tracked_path in list(meta.keys()):
-            if tracked_path.startswith(directory_path) and not os.path.exists(tracked_path):
-                removed_files.append(tracked_path)
+        removed_files = [
+            p for p in list(meta.keys())
+            if p.startswith(directory_path) and not os.path.exists(p)
+        ]
 
     # Enqueue
     for f in removed_files:
@@ -505,6 +585,9 @@ def index_directory(directory_path: str) -> str:
 def search_codebase(query: str, k: int = 3) -> str:
     """Search indexed code for semantically similar content."""
     touch()
+
+    if not query or not query.strip():
+        return "Error: Query cannot be empty."
 
     # Clamp k
     if k < 1:
@@ -546,7 +629,10 @@ def get_index_stats() -> str:
     """Return index statistics. Never loads model/index."""
     touch()
 
-    tvim_size = os.path.getsize(INDEX_PATH) if os.path.exists(INDEX_PATH) else 0
+    try:
+        tvim_size = os.path.getsize(INDEX_PATH) if os.path.exists(INDEX_PATH) else 0
+    except Exception:
+        tvim_size = 0
 
     with index_lock:
         vcount = len(store)
@@ -592,7 +678,10 @@ def index_stats() -> str:
     """Detailed index statistics as JSON. Lightweight — no model/index load."""
     touch()
 
-    tvim_size = os.path.getsize(INDEX_PATH) if os.path.exists(INDEX_PATH) else 0
+    try:
+        tvim_size = os.path.getsize(INDEX_PATH) if os.path.exists(INDEX_PATH) else 0
+    except Exception:
+        tvim_size = 0
 
     with index_lock:
         vcount = len(store)
@@ -614,7 +703,7 @@ def index_stats() -> str:
         "model_loaded": model is not None,
         "model": "all-MiniLM-L6-v2",
     }
-    return json.dumps(stats, indent=2)
+    return json.dumps(stats, indent=2, default=str)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -632,14 +721,30 @@ def main() -> None:
     # Run startup validations
     validate_environment()
 
-    os.makedirs(TURBOCODE_DIR, exist_ok=True)
+    try:
+        os.makedirs(TURBOCODE_DIR, exist_ok=True)
+    except Exception as e:
+        log(f"WARNING: Cannot create {TURBOCODE_DIR}: {e}")
 
     # Load and verify consistency of persisted data
-    load_and_verify()
+    try:
+        load_and_verify()
+    except Exception as e:
+        log(f"WARNING: Failed to load persisted state ({e}). Starting fresh.")
+        meta.clear()
+        store.clear()
+        current_id = 1
 
     # Start background threads
-    threading.Thread(target=background_worker, daemon=True).start()
-    threading.Thread(target=idle_watchdog, daemon=True).start()
+    try:
+        threading.Thread(target=background_worker, daemon=True).start()
+    except Exception:
+        log("WARNING: Failed to start background worker. Indexing disabled.")
+
+    try:
+        threading.Thread(target=idle_watchdog, daemon=True).start()
+    except Exception:
+        log("WARNING: Failed to start idle watchdog.")
 
     debug(f"TURBOCODE_DIR={TURBOCODE_DIR}")
     debug(f"INDEX_PATH={INDEX_PATH}")
@@ -650,11 +755,17 @@ def main() -> None:
         f"Idle timeout: {IDLE_TIMEOUT // 60}m.")
 
     # Handle graceful shutdown signals
-    import signal as sig_module
-
     def handle_signal(signum, frame):
         log(f"Received signal {signum}. Persisting and shutting down...")
-        persist_all()
+        if index_lock.acquire(blocking=False):
+            try:
+                persist_all()
+            except Exception:
+                pass
+            finally:
+                index_lock.release()
+        else:
+            log("WARNING: Index lock held by worker. Skipping persist on shutdown.")
         os._exit(0)
 
     sig_module.signal(sig_module.SIGINT, handle_signal)
