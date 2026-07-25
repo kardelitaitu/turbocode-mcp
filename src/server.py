@@ -38,6 +38,13 @@ BATCH_INTERVAL = 1.0  # seconds
 IDLE_TIMEOUT = 30 * 60  # 30 minutes
 CHECK_INTERVAL = 60  # seconds between idle checks
 
+# Directories to skip when scanning (common non-source dirs)
+SKIP_DIRS = {
+    ".venv", "venv", "env", "node_modules", ".git", "__pycache__",
+    ".pytest_cache", ".ruff_cache", ".mypy_cache", ".hypothesis",
+    "build", "dist", ".eggs", "egg-info", ".tox", ".nox",
+}
+
 # Lazy-loaded globals
 MODEL_NAME: str = "BAAI/bge-small-en-v1.5"
 model: object | None = None  # _ModelClient instance or None
@@ -45,7 +52,7 @@ index: IdMapIndex | None = None
 meta: dict[str, dict] = {}
 store: dict[int, dict] = {}
 current_id: int = 0
-last_activity: float = 0.0
+last_activity: float = 0.0  # Set to time.time() in main()
 
 # Thread-safe queue
 index_queue: deque = deque()
@@ -712,7 +719,8 @@ def index_directory(directory_path: str, respect_gitignore: bool = True) -> str:
 
     # Walk filesystem
     try:
-        for root, _, files in os.walk(directory_path, followlinks=False):
+        for root, dirs, files in os.walk(directory_path, followlinks=False):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
             for f in files:
                 if not f.lower().endswith(supported_ext):
                     continue
@@ -880,7 +888,8 @@ def index_workspace(directory_path: str) -> str:
         meta_snapshot = dict(meta)
 
     try:
-        for root, _, files in os.walk(directory_path, followlinks=False):
+        for root, dirs, files in os.walk(directory_path, followlinks=False):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
             for f in files:
                 if not f.lower().endswith(supported_ext):
                     continue
@@ -1174,16 +1183,115 @@ def index_stats() -> str:
 # ═══════════════════════════════════════════════════════════════
 
 
+WORKSPACE_DIR: str | None = None
+
+
+def auto_discover_workspace() -> str | None:
+    """Find the best workspace to index. Walks up from CWD looking for project roots."""
+    candidates = []
+    start = os.getcwd()
+    current = start
+    while True:
+        markers = [".git", "package.json", "pyproject.toml", "Cargo.toml", "go.mod"]
+        for m in markers:
+            if os.path.isfile(os.path.join(current, m)):
+                candidates.append(current)
+                break
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return candidates[0] if candidates else None
+
+
+def auto_index_on_startup() -> None:
+    """Smart auto-index on startup. Non-blocking — scans workspace and queues new/changed/removed files."""
+    workspace = WORKSPACE_DIR
+    if workspace is None:
+        discovered = auto_discover_workspace()
+        if discovered is None:
+            log("No workspace detected. Skipping auto-index.")
+            return
+        workspace = discovered
+
+    if not os.path.isdir(workspace):
+        log(f"Workspace '{workspace}' not found. Skipping auto-index.")
+        return
+
+    log(f"Auto-indexing workspace: {workspace}")
+    supported_ext = (".py", ".rs", ".md", ".txt", ".js", ".ts", ".go", ".toml", ".json", ".yaml", ".yml")
+
+    # Snapshot meta for O(1) lookups during walk
+    with index_lock:
+        meta_snapshot = dict(meta)
+
+    new_files: list[str] = []
+    changed_files: list[str] = []
+
+    try:
+        for root, dirs, files in os.walk(workspace, followlinks=False):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            for f in files:
+                if not f.lower().endswith(supported_ext):
+                    continue
+                fp = os.path.normpath(os.path.join(root, f))
+                tracked = meta_snapshot.get(fp)
+                if tracked is None:
+                    new_files.append(fp)
+                elif isinstance(tracked, dict):
+                    try:
+                        if tracked.get("mtime", 0) != os.path.getmtime(fp):
+                            changed_files.append(fp)
+                    except OSError:
+                        pass
+    except PermissionError:
+        log(f"WARNING: Permission denied reading some files in '{workspace}'.")
+    except OSError as e:
+        log(f"WARNING: Error scanning '{workspace}': {e}")
+
+    # Detect removed files
+    norm_ws = os.path.normpath(workspace) + os.sep
+    with index_lock:
+        removed_files = [
+            p for p in list(meta.keys())
+            if os.path.normpath(p).startswith(norm_ws) and not os.path.exists(p)
+        ]
+
+    # Enqueue
+    for f in removed_files:
+        enqueue("remove", f)
+    for f in changed_files:
+        enqueue("changed", f)
+    for f in new_files:
+        enqueue("new", f)
+
+    total = len(new_files) + len(changed_files) + len(removed_files)
+    if total == 0:
+        log("All files up to date.")
+    else:
+        parts = []
+        if new_files: parts.append(f"{len(new_files)} new")
+        if changed_files: parts.append(f"{len(changed_files)} changed")
+        if removed_files: parts.append(f"{len(removed_files)} to remove")
+        log(f"Queued {total} files ({', '.join(parts)}) for indexing.")
+
+
 def main() -> None:
-    global meta, store, current_id, DEBUG_MODE
+    global meta, store, current_id, DEBUG_MODE, WORKSPACE_DIR
 
     # Parse CLI flags
     global MODEL_NAME
-    if "--debug" in sys.argv:
+    argv_set = set(sys.argv)
+    if "--debug" in argv_set:
         DEBUG_MODE = True
+    stdio_mode = "--stdio" in argv_set
     for arg in sys.argv:
         if arg.startswith("--model="):
             MODEL_NAME = arg.split("=", 1)[1]
+        elif arg.startswith("--workspace="):
+            WORKSPACE_DIR = os.path.abspath(arg.split("=", 1)[1])
+        elif arg.startswith("--cwd="):
+            os.chdir(os.path.abspath(arg.split("=", 1)[1]))
 
     # Run startup validations
     validate_environment()
@@ -1211,6 +1319,9 @@ def main() -> None:
         store.clear()
         current_id = 1
 
+    # Initialize activity timer before starting watchdog
+    touch()
+
     # Start background threads
     try:
         threading.Thread(target=background_worker, daemon=True).start()
@@ -1221,6 +1332,20 @@ def main() -> None:
         threading.Thread(target=idle_watchdog, daemon=True).start()
     except Exception:
         log("WARNING: Failed to start idle watchdog.")
+
+    # Smart auto-index on startup (non-blocking)
+    try:
+        auto_index_on_startup()
+    except Exception as e:
+        log(f"WARNING: Auto-index failed: {e}")
+
+    # Preload model and index if there's queued work
+    if queue_depth() > 0:
+        try:
+            log("Preloading model and index for queued files...")
+            ensure_resources()
+        except Exception as e:
+            log(f"WARNING: Failed to preload resources: {e}")
 
     debug(f"TURBOCODE_DIR={TURBOCODE_DIR}")
     debug(f"INDEX_PATH={INDEX_PATH}")
@@ -1248,7 +1373,10 @@ def main() -> None:
     sig_module.signal(sig_module.SIGINT, handle_signal)
     sig_module.signal(sig_module.SIGTERM, handle_signal)
 
-    mcp.run()
+    if stdio_mode:
+        mcp.run(transport="stdio", show_banner=False)
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@
     "bin/",
     "src/**/*.py",
     "scripts/",
+    "skills/",
     "requirements.txt",
     "package.json",
     "README.md",

@@ -13,3 +13,4 @@ AGENTS.md
 CHANGELOG.md
 *.md
 !README.md
+!skills/**/*.md

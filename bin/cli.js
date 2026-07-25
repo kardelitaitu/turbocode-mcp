@@ -46,10 +46,11 @@ USAGE:
     turbocode-mcp [OPTIONS]
 
 OPTIONS:
-    --help          Print this help message and exit
-    --version       Print the version number and exit
-    --debug         Enable verbose logging to stderr
-    --model=<name>  Override the embedding model (default: BAAI/bge-small-en-v1.5)
+    --help              Print this help message and exit
+    --version           Print the version number and exit
+    --debug             Enable verbose logging to stderr
+    --model=<name>      Override the embedding model (default: BAAI/bge-small-en-v1.5)
+    --workspace=<path>  Directory to auto-index on startup (default: auto-detect)
 
 EXAMPLES:
     turbocode-mcp
@@ -99,12 +100,14 @@ function main(options = {}) {
 
     const debug = flags.has('--debug');
 
-    // Extract --model=<name> if provided
+    // Extract --model=<name> and --workspace=<path> if provided
     let modelArg = null;
+    let workspaceArg = null;
     for (const arg of argv) {
         if (arg.startsWith('--model=')) {
             modelArg = arg;
-            break;
+        } else if (arg.startsWith('--workspace=')) {
+            workspaceArg = arg;
         }
     }
 
@@ -129,10 +132,19 @@ function main(options = {}) {
         logFn(`Server: ${serverScript}`);
     }
 
-    // Spawn the Python MCP server with inherited stdio
-    const serverArgs = [serverScript];
+    // Always run in stdio mode (MCP protocol over stdin/stdout)
+    const serverArgs = [serverScript, '--stdio'];
     if (debug) serverArgs.push('--debug');
     if (modelArg) serverArgs.push(modelArg);
+    if (workspaceArg) serverArgs.push(workspaceArg);
+
+    if (debug) {
+        logFn(`Spawning: ${pythonExecutable} ${serverArgs.join(' ')}`);
+    }
+
+    // Use 'inherit' so the Python process communicates directly with
+    // the MCP client (opencode) over stdin/stdout without Node.js
+    // buffering or transforming the data.
     const mcpProcess = spawnImpl(pythonExecutable, serverArgs, {
         stdio: 'inherit',
         env: { ...env },
@@ -145,9 +157,11 @@ function main(options = {}) {
 
     mcpProcess.on('exit', (code, signal) => {
         if (signal) {
+            if (debug) logFn(`Exited with signal ${signal}`);
             exitFn(128 + (signal === 'SIGINT' ? 2 : 15));
             return;
         }
+        if (debug) logFn(`Exited with code ${code}`);
         exitFn(typeof code === 'number' ? code : 1);
     });
 

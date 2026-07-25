@@ -57,7 +57,8 @@ TurboCode MCP works with any MCP-compatible agent. Below are setup instructions 
 {
   "mcpServers": {
     "turbocode-mcp": {
-      "command": "turbocode-mcp"
+      "command": "turbocode-mcp",
+      "cwd": "."
     }
   }
 }
@@ -68,7 +69,8 @@ TurboCode MCP works with any MCP-compatible agent. Below are setup instructions 
 {
   "mcpServers": {
     "turbocode-mcp": {
-      "command": "turbocode-mcp"
+      "command": "turbocode-mcp",
+      "cwd": "."
     }
   }
 }
@@ -80,7 +82,8 @@ TurboCode MCP works with any MCP-compatible agent. Below are setup instructions 
   "experimental": {
     "mcpServers": {
       "turbocode-mcp": {
-        "command": "turbocode-mcp"
+        "command": "turbocode-mcp",
+        "cwd": "."
       }
     }
   }
@@ -92,7 +95,8 @@ TurboCode MCP works with any MCP-compatible agent. Below are setup instructions 
 {
   "mcpServers": {
     "turbocode-mcp": {
-      "command": "turbocode-mcp"
+      "command": "turbocode-mcp",
+      "cwd": "."
     }
   }
 }
@@ -103,7 +107,8 @@ TurboCode MCP works with any MCP-compatible agent. Below are setup instructions 
 {
   "servers": {
     "turbocode-mcp": {
-      "command": "turbocode-mcp"
+      "command": "turbocode-mcp",
+      "cwd": "."
     }
   }
 }
@@ -123,13 +128,17 @@ TurboCode MCP works with any MCP-compatible agent. Below are setup instructions 
     "turbocode-mcp": {
       "type": "local",
       "command": ["turbocode-mcp"],
+      "cwd": ".",
       "enabled": true
     }
   }
 }
 ```
 
-Your AI assistant can now index and search your local codebase.
+> **`"cwd": "."` tells the server to auto-index the project folder on startup.**  
+> The server scans files, diffs against the persisted index, and queues new/changed/removed files automatically — no manual `/turbocode index` needed. Omit or change the path to index a different directory.
+
+Your AI assistant can now index and search your local codebase. On startup, the server automatically indexes the `cwd` directory — no manual `index_directory` call required.
 
 ---
 
