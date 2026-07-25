@@ -191,12 +191,13 @@ The core of the application. A Python server using the FastMCP framework.
 
 ### Decision 8: Directory Structure
 
-**Choice:** The persistent index lives in `.turbocode/` at the package root, not in the indexed project.
+**Choice:** The persistent index lives in `~/.turbocode/` (user home directory), not in the indexed project or package root.
 
 **Rationale:**
 - Keeps the indexed project clean (no hidden folder injected)
+- Survives npm reinstall/upgrade (package root is ephemeral)
+- User home is always writable, unlike global `node_modules/`
 - The `.turbocode/` directory is git-ignored in the package
-- Multiple users of the same npm global install share the same index location
 
 **Trade-off:** Indexing multiple independent projects with the same server means they share a single index. Acceptable for the v1; multi-project named indexes are on the roadmap.
 
@@ -209,7 +210,7 @@ The core of the application. A Python server using the FastMCP framework.
 ```
 server.py starts
   │
-  ├── Create .turbocode/ if missing
+  ├── Create ~/.turbocode/ if missing
   ├── Load meta.json + store.json (small JSON, instant)
   ├── RECOVERY CHECK: count(store) vs count(meta) vs index_dim
   │   └── If diverged → log warning, rebuild from store data
@@ -380,7 +381,7 @@ def atomic_write(path: str, data: str):
     os.replace(tmp, path)     # Atomic on Windows + POSIX
 
 def persist_all():
-    os.makedirs(".turbocode", exist_ok=True)
+    os.makedirs(TURBOCODE_DIR, exist_ok=True)
     with index_lock:
         # Atomic index write
         index.write(INDEX_PATH + ".tmp")
@@ -511,4 +512,4 @@ def queue_depth() -> int:
 | **Air-gapped** | No network calls for embedding or search. The model downloads once to cache, then runs offline. |
 | **No user data egress** | Code content never leaves the process. No telemetry, no analytics. |
 | **Isolated Python env** | Dependencies are installed in a dedicated `.venv`, not system Python. |
-| **File access scope** | The server only reads files explicitly provided via `index_directory`. It writes only to `.turbocode/`. |
+| **File access scope** | The server only reads files explicitly provided via `index_directory`. It writes only to `~/.turbocode/`. |

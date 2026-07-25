@@ -16,6 +16,22 @@ numpy>=1.24.0               # Array operations
 
 ---
 
+## Logging Convention
+
+**MCP communicates over stdout using JSON-RPC.** Any stray `print()` on stdout corrupts the protocol. All logging must go to stderr.
+
+```python
+import sys
+
+def log(msg: str):
+    """Log a message to stderr (stdout is reserved for MCP protocol)."""
+    print(f"[TurboCode MCP] {msg}", file=sys.stderr, flush=True)
+```
+
+Use `log()` everywhere instead of `print()` for status messages, warnings, and errors.
+
+---
+
 ## Turbovec Persistence API
 
 ### The Critical Finding
@@ -252,8 +268,6 @@ def handle_index(file_path: str):
     
     # ── CPU: no lock needed ──
     embedding = model.encode([chunk])
-    file_id = current_id
-    current_id += 1
     
     # ── Brief critical section ──
     with index_lock:
@@ -266,6 +280,8 @@ def handle_index(file_path: str):
                 pass
             store.pop(old_id, None)
         
+        file_id = current_id
+        current_id += 1
         index.add_with_ids(embedding, np.array([file_id], dtype=np.uint64))
         store[file_id] = {"path": file_path, "content": chunk}
         meta[file_path] = {
@@ -328,11 +344,9 @@ def idle_watchdog():
         time.sleep(CHECK_INTERVAL)
         if time.time() - last_activity > IDLE_TIMEOUT:
             persist_all()
-            print(
-                f"\n[TurboCode MCP] Idle for {IDLE_TIMEOUT // 60} minutes. "
+            log(f"Idle for {IDLE_TIMEOUT // 60} minutes. "
                 "Shutting down to free resources. "
-                "Will restart automatically when needed."
-            )
+                "Will restart automatically when needed.")
             os._exit(0)
 ```
 
@@ -358,7 +372,7 @@ def atomic_write(path: str, data: str):
 
 def persist_all():
     """Save index, meta, and store to disk atomically."""
-    os.makedirs(".turbocode", exist_ok=True)
+    os.makedirs(TURBOCODE_DIR, exist_ok=True)
     
     with index_lock:
         # Write index to tmp then rename
@@ -618,7 +632,7 @@ def index_stats() -> str:
 def main():
     global meta, store, current_id
     
-    os.makedirs(".turbocode", exist_ok=True)
+    os.makedirs(TURBOCODE_DIR, exist_ok=True)
     
     # Load and verify consistency of persisted data
     load_and_verify()
@@ -627,9 +641,9 @@ def main():
     threading.Thread(target=background_worker, daemon=True).start()
     threading.Thread(target=idle_watchdog, daemon=True).start()
     
-    print(f"[TurboCode MCP] Ready. {len(meta)} files tracked. "
-          f"Model/index loaded on demand. "
-          f"Idle timeout: {IDLE_TIMEOUT // 60}m.")
+    log(f"Ready. {len(meta)} files tracked. "
+        f"Model/index loaded on demand. "
+        f"Idle timeout: {IDLE_TIMEOUT // 60}m.")
     
     mcp.run()
 

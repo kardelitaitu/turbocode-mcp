@@ -246,9 +246,9 @@ Detailed statistics as a JSON document. Also lightweight — never loads the mod
 
 ---
 
-## File Format (`.turbocode/`)
+## File Format (`~/.turbocode/`)
 
-The server creates and manages these files:
+The server creates and manages these files in your home directory (`~/.turbocode/`):
 
 ### `index.tvim`
 
