@@ -120,12 +120,10 @@ TurboCode MCP works with any MCP-compatible agent. Below are setup instructions 
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "servers": {
-      "turbocode-mcp": {
-        "type": "local",
-        "command": ["turbocode-mcp"],
-        "enabled": true
-      }
+    "turbocode-mcp": {
+      "type": "local",
+      "command": ["turbocode-mcp"],
+      "enabled": true
     }
   }
 }
