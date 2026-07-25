@@ -7,6 +7,7 @@ from collections import deque
 
 import numpy as np
 import pytest
+from hypothesis import given, strategies as st
 
 import server
 
@@ -1780,6 +1781,182 @@ class TestEnqueuePriorityEdgeCases:
         batch = server.dequeue_batch(10)
         result = [p for p, _ in batch]
         assert result == ["remove", "new", "new", "changed", "reindex"]
+
+
+class TestPropertyBasedQueue:
+    @given(
+        priorities=st.lists(st.sampled_from(["remove", "new", "changed", "reindex", "unknown"])),
+    )
+    def test_dequeue_preserves_items(self, priorities):
+        for i, p in enumerate(priorities):
+            server.enqueue(p, f"/f{i}.py")
+        batch = server.dequeue_batch(1000)
+        assert len(batch) == len(priorities)
+        dequeued_priorities = [p for p, _ in batch]
+        assert sorted(dequeued_priorities) == sorted(priorities)
+
+    @given(
+        n1=st.integers(min_value=0, max_value=10),
+        n2=st.integers(min_value=0, max_value=10),
+    )
+    def test_enqueue_dequeue_equivalence(self, n1, n2):
+        for i in range(n1):
+            server.enqueue("new", f"/a{i}.py")
+        for i in range(n2):
+            server.enqueue("changed", f"/b{i}.py")
+        batch = server.dequeue_batch(100)
+        assert len(batch) == n1 + n2
+
+    @given(
+        file_paths=st.lists(st.text(min_size=1, max_size=50), min_size=0, max_size=10),
+    )
+    def test_queue_depth_matches_enqueues(self, file_paths):
+        for fp in file_paths:
+            server.enqueue("new", fp)
+        assert server.queue_depth() == len(file_paths)
+
+    @given(
+        batch_size=st.integers(min_value=0, max_value=20),
+        n=st.integers(min_value=0, max_value=15),
+    )
+    def test_dequeue_batch_size_constraint(self, batch_size, n):
+        for i in range(n):
+            server.enqueue("new", f"/f{i}.py")
+        batch = server.dequeue_batch(batch_size)
+        expected = min(n, batch_size) if batch_size > 0 else 0
+        assert len(batch) == expected
+
+
+class TestNonDictMetaValues:
+    def test_find_stale_non_dict_meta_skipped(self, mocker):
+        server.meta = {
+            "/good.py": {"id": 1, "last_indexed": 0},
+            "/bad.py": "not_a_dict",
+            "/also_bad.py": None,
+        }
+        stale = server.find_stale_files(max_age_days=0, max_files=10)
+        assert "/good.py" in stale
+        assert "/bad.py" not in stale
+        assert "/also_bad.py" not in stale
+
+    def test_index_directory_non_dict_meta_skipped(self, tmp_path, mock_model, mock_index):
+        d = tmp_path / "mixed"
+        d.mkdir()
+        (d / "a.py").write_text("x = 1")
+        (d / "b.py").write_text("y = 2")
+        server.meta[str(d / "a.py")] = {"id": 1, "mtime": 0}
+        server.meta[str(d / "b.py")] = "corrupt"
+        result = server.index_directory(str(d))
+        assert "Queued" in result
+
+    def test_persist_all_with_non_dict_meta_does_not_crash(self, mock_index, mocker):
+        server.index = mock_index
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        server.meta = {"/a.py": "not_a_dict"}
+        server.store = {}
+        server.persist_all()
+        # no crash
+
+
+class TestSearchCodebaseMalformedModel:
+    def test_model_encode_returns_none(self, mock_model, mock_index, populated_state):
+        mock_model.encode.return_value = None
+        result = server.search_codebase("query")
+        assert "Failed to embed" in result
+
+    def test_model_encode_returns_empty_array(self, mock_model, mock_index, populated_state):
+        mock_model.encode.return_value = np.array([])
+        result = server.search_codebase("query")
+        assert "Failed to embed" in result
+
+    def test_model_encode_returns_wrong_dimensions(self, mock_model, mock_index, populated_state):
+        mock_model.encode.return_value = np.random.rand(1, 10).astype(np.float32)
+        with pytest.raises(Exception):
+            server.search_codebase("query")
+
+
+class TestConcurrentIndexAndSearch:
+    def test_concurrent_index_and_search(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.search.return_value = (
+            np.array([[0.95]]), np.array([[1]], dtype=np.uint64),
+        )
+
+        d = tmp_path / "concurrent"
+        d.mkdir()
+        (d / "test.py").write_text("x = 1")
+        server.store = {1: {"path": str(d / "test.py"), "content": "x = 1"}}
+
+        results = [None, None]
+
+        def indexer():
+            results[0] = server.index_directory(str(d))
+
+        def searcher():
+            results[1] = server.search_codebase("test")
+
+        t1 = threading.Thread(target=indexer)
+        t2 = threading.Thread(target=searcher)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert results[0] is not None
+        assert results[1] is not None
+
+
+class TestIdleWatchdogTimeout:
+    def test_idle_watchdog_exits_after_timeout(self, mocker):
+        mocker.patch.object(server, "CHECK_INTERVAL", 0.01)
+        mocker.patch.object(server, "IDLE_TIMEOUT", -1)  # always idle
+        mock_exit = mocker.patch("server.os._exit")
+        server._stop_event.clear()
+        t = threading.Thread(target=server.idle_watchdog, daemon=True)
+        t.start()
+        time.sleep(0.15)
+        server._stop_event.set()
+        mock_exit.assert_called_once_with(0)
+
+    def test_idle_watchdog_persist_failure_logs(self, mocker):
+        mocker.patch.object(server, "CHECK_INTERVAL", 0.01)
+        mocker.patch.object(server, "IDLE_TIMEOUT", -1)
+        mocker.patch("server.persist_all", side_effect=RuntimeError("persist fail"))
+        mock_log = mocker.patch("server.log")
+        mock_exit = mocker.patch("server.os._exit")
+        server._stop_event.clear()
+        t = threading.Thread(target=server.idle_watchdog, daemon=True)
+        t.start()
+        time.sleep(0.15)
+        server._stop_event.set()
+        assert any("persist" in str(c).lower() for c in mock_log.call_args_list)
+
+
+class TestBackgroundWorkerMixedBatch:
+    def test_mixed_remove_and_index_batch(self, tmp_path, mock_model, mock_index, mocker):
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.remove.return_value = None
+
+        f = tmp_path / "mixed.py"
+        f.write_text("x = 1")
+        server.current_id = 1
+        server.handle_index(str(f))
+        old_id = server.meta[str(f)]["id"]
+
+        server.enqueue("remove", str(f))
+        server.enqueue("new", str(f))
+
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.2)
+        server._stop_event.set()
+
+        assert str(f) in server.meta
+        new_id = server.meta[str(f)]["id"]
+        assert new_id != old_id
 
 
 class TestIndexStatsNonSerializable:

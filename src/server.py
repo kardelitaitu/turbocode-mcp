@@ -406,8 +406,8 @@ def find_stale_files(max_age_days: int = 7, max_files: int = 10) -> list[str]:
     with index_lock:
         candidates = [
             path
-            for path, info in meta.items()
-            if info.get("last_indexed", 0) < cutoff
+            for path, info in list(meta.items())
+            if isinstance(info, dict) and info.get("last_indexed", 0) < cutoff
         ]
 
     if not candidates:
@@ -536,9 +536,13 @@ def index_directory(directory_path: str) -> str:
                 fp = os.path.join(root, f)
 
                 with index_lock:
-                    tracked = fp in meta
-                    tracked_info = meta.get(fp) if tracked else None
-                    tracked_mtime = tracked_info.get("mtime", 0) if tracked_info else None
+                    tracked_info = meta.get(fp)
+                    tracked = tracked_info is not None
+                    tracked_mtime = (
+                        tracked_info.get("mtime", 0)
+                        if isinstance(tracked_info, dict)
+                        else None
+                    )
 
                 if not tracked:
                     new_files.append(fp)
@@ -602,6 +606,8 @@ def search_codebase(query: str, k: int = 3) -> str:
     ensure_resources()
 
     query_vec = model.encode([query])
+    if query_vec is None or query_vec.size == 0:
+        return f"Error: Failed to embed query '{query}'."
 
     with index_lock:
         scores, ids = index.search(query_vec, k=k)
