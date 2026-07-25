@@ -6,24 +6,27 @@
 
 ---
 
-## [Unreleased]
+## [1.0.0] — 2026-07-25
 
 ### Added
 
-- Project scaffolding: `package.json`, `bin/cli.js`, `scripts/setup.js`
-- Python MCP server with FastMCP + Turbovec (`src/server.py`)
-- Disk-persistent vector index (`.turbocode/index.tvim`)
-- Background indexing worker (daemon thread, 5-file batches)
-- Incremental indexing (skip unchanged files via `meta.json`)
-- Stale file re-indexing (auto-refresh files older than 7 days)
-- Lazy loading (model and index load on first use only)
-- Idle shutdown watchdog (30-minute timeout, `os._exit(0)`)
-- Three MCP tools: `index_directory`, `search_codebase`, `get_index_stats`
-- Two MCP resources: `turbocode://status`, `turbocode://stats`
-- Full documentation suite: getting-started, usage, architecture, reference, roadmap
+- **Project scaffolding:** `package.json` with `bin` and `postinstall`, `scripts/setup.js`, `bin/cli.js`, `requirements.txt`, `.gitignore`
+- **Python MCP server** (`src/server.py`) with FastMCP + Turbovec
+- **Disk-persistent index** (`~/.turbocode/index.tvim`, `meta.json`, `store.json`) with atomic writes
+- **Background indexing worker** — daemon thread, 5-file batches, 1s interval
+- **Incremental indexing** — skip unchanged files via mtime comparison
+- **Stale file re-indexing** — idle worker refreshes files older than 7 days
+- **Lazy loading** — model and index load on first use only (instant startup)
+- **Idle shutdown watchdog** — exits after 30 minutes of inactivity; client auto-restarts
+- **Signal handling** — SIGINT/SIGTERM persist state before exit
+- **Three MCP tools:** `index_directory`, `search_codebase`, `get_index_stats`
+- **Two MCP resources:** `turbocode://status`, `turbocode://stats`
+- **CLI flags:** `--help`, `--version`, `--debug`
+- **Startup validation:** Python >= 3.9 check, required package imports
+- **Full documentation suite:** getting-started, usage, architecture, reference, roadmap
 - `AGENTS.md` — orientation for AI coding agents
+- `CHANGELOG.md` — version history
 - `JOURNAL.md` — development journal
-- Node.js CLI wrapper with automatic Python venv setup via `postinstall`
 
 ### Known Issues
 
