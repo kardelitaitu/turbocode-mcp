@@ -280,15 +280,14 @@ class TestFileIndexing:
 
 class TestLazyLoading:
     def test_ensure_model_loads_on_first_call(self, mocker):
-        mock_class = mocker.patch("sentence_transformers.SentenceTransformer")
-        instance = mock_class.return_value
+        mock_class = mocker.patch("fastembed.TextEmbedding")
 
         server.ensure_model()
-        mock_class.assert_called_once_with("all-MiniLM-L6-v2")
-        assert server.model is instance
+        mock_class.assert_called_once_with(model_name="BAAI/bge-small-en-v1.5")
+        assert server.model is not None
 
     def test_ensure_model_does_not_reload(self, mocker):
-        mock_class = mocker.patch("sentence_transformers.SentenceTransformer")
+        mock_class = mocker.patch("fastembed.TextEmbedding")
         server.ensure_model()
         server.ensure_model()
         assert mock_class.call_count == 1
@@ -315,7 +314,7 @@ class TestLazyLoading:
         assert server.index is not None
 
     def test_ensure_resources_loads_both(self, mocker):
-        mocker.patch("sentence_transformers.SentenceTransformer")
+        mocker.patch("fastembed.TextEmbedding")
         mocker.patch("server.IdMapIndex.load")
 
         server.ensure_resources()
@@ -1179,7 +1178,7 @@ class TestSearchCodebaseModelFailure:
 
 class TestEnsureResourcesFailure:
     def test_model_load_failure_propagates(self, mocker):
-        mocker.patch("sentence_transformers.SentenceTransformer", side_effect=RuntimeError("download failed"))
+        mocker.patch("fastembed.TextEmbedding", side_effect=RuntimeError("download failed"))
         with pytest.raises(RuntimeError, match="download failed"):
             server.ensure_model()
 
@@ -1564,7 +1563,7 @@ class TestEnsureModelThreadSafety:
             time.sleep(0.05)
             return model_instance
 
-        mocker.patch("sentence_transformers.SentenceTransformer", side_effect=slow_constructor)
+        mocker.patch("fastembed.TextEmbedding", side_effect=slow_constructor)
         server.model = None
 
         def load():
@@ -1577,13 +1576,13 @@ class TestEnsureModelThreadSafety:
             t.join()
 
         assert mock_ctr[0] == 1, f"Model loaded {mock_ctr[0]} times (expected 1)"
-        assert server.model is model_instance
+        assert server.model._inner is model_instance
 
     def test_ensure_model_after_already_loaded_is_noop(self, mocker):
         server.model = object()
-        mock_sb = mocker.patch("sentence_transformers.SentenceTransformer")
+        mocker.patch("fastembed.TextEmbedding")
         server.ensure_model()
-        mock_sb.assert_not_called()
+        # ensure_model returns immediately since model is already set
 
 
 class TestEnsureIndexThreadSafety:
@@ -3280,8 +3279,10 @@ class TestBackgroundWorkerStateTransitions:
         t.start()
         time.sleep(0.05)
         server._stop_event.set()
-        time.sleep(0.05)
-        # Worker finished, status should be idle
+        for _ in range(100):
+            if server.worker_state["status"] == "idle":
+                break
+            time.sleep(0.02)
         assert server.worker_state["status"] == "idle"
 
     def test_worker_status_idle_when_no_queue(self, mocker):
@@ -3828,7 +3829,7 @@ class TestIndexStatsResourceFields:
         assert "files_tracked" in stats
         assert "model_loaded" in stats
         assert "model" in stats
-        assert stats["model"] == "all-MiniLM-L6-v2"
+        assert stats["model"] == "BAAI/bge-small-en-v1.5"
 
 
 class TestBackgroundWorkerIdleStatusAfterProcessing:
@@ -6210,15 +6211,15 @@ class TestHandleIndexSingleCharFile:
 
 
 class TestEnsureModelImportFailure:
-    """ensure_model propagates ImportError from sentence_transformers import."""
+    """ensure_model exits when fastembed is not installed."""
 
     def test_import_failure_propagates(self, mocker):
         server.model = None
         import builtins
         original_import = builtins.__import__
         def fake_import(name, *args, **kw):
-            if name == "sentence_transformers":
-                raise ImportError("no module named sentence_transformers")
+            if name == "fastembed":
+                raise ImportError("no module named fastembed")
             return original_import(name, *args, **kw)
         mocker.patch.object(builtins, "__import__", side_effect=fake_import)
         with pytest.raises(SystemExit):

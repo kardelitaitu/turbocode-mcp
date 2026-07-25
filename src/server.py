@@ -36,6 +36,7 @@ IDLE_TIMEOUT = 30 * 60  # 30 minutes
 CHECK_INTERVAL = 60  # seconds between idle checks
 
 # Lazy-loaded globals
+MODEL_NAME: str = "BAAI/bge-small-en-v1.5"
 model: SentenceTransformer | None = None
 index: IdMapIndex | None = None
 meta: dict[str, dict] = {}
@@ -91,12 +92,21 @@ def ensure_model() -> None:
         if model is not None:
             return
         try:
-            from sentence_transformers import SentenceTransformer
+            from fastembed import TextEmbedding
         except ImportError:
-            log("ERROR: sentence-transformers not installed. Please run: npm install -g turbocode-mcp")
+            log("ERROR: fastembed not installed. Please run: npm install -g turbocode-mcp")
             sys.exit(1)
         log("Loading embedding model (first call)...")
-        model = SentenceTransformer("all-MiniLM-L6-v2")
+
+        class _EmbeddingWrapper:
+            """Wraps fastembed's generator-based API into sentence-transformers
+            style encode() for backward-compatible mocks."""
+            def __init__(self, inner):
+                self._inner = inner
+            def encode(self, texts, **_kw):
+                return np.array(list(self._inner.embed(texts)))
+
+        model = _EmbeddingWrapper(TextEmbedding(model_name=MODEL_NAME))
 
 
 def ensure_index() -> None:
@@ -608,7 +618,7 @@ def _is_gitignored(filepath: str, specs: list[tuple[str, pathspec.PathSpec]]) ->
 
 
 @mcp.tool
-def index_directory(directory_path: str) -> str:
+def index_directory(directory_path: str, respect_gitignore: bool = True) -> str:
     """Scan and queue files for background indexing."""
     touch()
 
@@ -632,7 +642,7 @@ def index_directory(directory_path: str) -> str:
         meta_snapshot = dict(meta)
 
     # Load .gitignore rules from directory upward
-    gitignore_specs = _load_gitignore_specs(directory_path)
+    gitignore_specs = _load_gitignore_specs(directory_path) if respect_gitignore else []
 
     # Walk filesystem
     try:
@@ -641,7 +651,7 @@ def index_directory(directory_path: str) -> str:
                 if not f.lower().endswith(SUPPORTED_EXT):
                     continue
                 fp = os.path.normpath(os.path.join(root, f))
-                if _is_gitignored(fp, gitignore_specs):
+                if respect_gitignore and _is_gitignored(fp, gitignore_specs):
                     debug(f"Skipping gitignored: {fp}")
                     continue
 
@@ -829,7 +839,7 @@ def index_stats() -> str:
         "errors": worker_state["errors"],
         "last_error": worker_state["last_error"],
         "model_loaded": model is not None,
-        "model": "all-MiniLM-L6-v2",
+        "model": MODEL_NAME,
     }
     return json.dumps(stats, indent=2, default=str)
 
@@ -843,8 +853,12 @@ def main() -> None:
     global meta, store, current_id, DEBUG_MODE
 
     # Parse CLI flags
+    global MODEL_NAME
     if "--debug" in sys.argv:
         DEBUG_MODE = True
+    for arg in sys.argv:
+        if arg.startswith("--model="):
+            MODEL_NAME = arg.split("=", 1)[1]
 
     # Run startup validations
     validate_environment()

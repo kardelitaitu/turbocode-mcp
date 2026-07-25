@@ -9,9 +9,6 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-# Pre-import heavy dependencies once during collection so their import cost
-# is not attributed to individual test fixtures.
-import sentence_transformers  # noqa: E402
 from turbovec import IdMapIndex  # noqa: E402
 
 
@@ -54,7 +51,8 @@ def tmp_paths(tmp_path, monkeypatch):
 def mock_model(mocker):
     instance = MagicMock()
     instance.encode.return_value = np.random.rand(1, 384).astype(np.float32)
-    mocker.patch("sentence_transformers.SentenceTransformer", return_value=instance)
+    instance.embed.return_value = iter([np.random.rand(384).astype(np.float32)])
+    mocker.patch("fastembed.TextEmbedding", return_value=instance)
     import server
     server.model = instance
     return instance
