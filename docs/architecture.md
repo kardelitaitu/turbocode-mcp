@@ -102,10 +102,10 @@ The core of the application. A Python server using the FastMCP framework.
 
 ### Decision 1: Lazy Loading
 
-**Choice:** The embedding model (`SentenceTransformer`) and vector index (`IdMapIndex`) are not loaded at startup. They load on first use.
+**Choice:** The embedding model (`TextEmbedding` via fastembed) and vector index (`IdMapIndex`) are not loaded at startup. They load on first use.
 
 **Rationale:**
-- The sentence-transformers model consumes ~500MB–1GB of RAM
+- The fastembed model consumes ~30MB of RAM, much lighter than the old sentence-transformers model
 - Resources (`turbocode://status`, `turbocode://stats`) and `get_index_stats()` never need the model
 - If the AI only checks status, the model is never loaded, saving significant memory
 - Startup time drops from ~5s to ~100ms
@@ -360,10 +360,10 @@ Safe:
 | `meta.json` | ~KB | On boot | Grows with file count |
 | `store.json` | ~KB–MB | On boot | Grows with file count |
 | `IdMapIndex` (.tvim) | ~2–20 MB | Lazy (first search/index) | 4-bit quantization keeps it small |
-| `SentenceTransformer` | ~500 MB – 1 GB | Lazy (first search/index) | All-MiniLM-L6-v2 |
+| `TextEmbedding` (fastembed) | ~30 MB | Lazy (first search/index) | BAAI/bge-small-en-v1.5 |
 | Python runtime | ~30–50 MB | On boot | Base interpreter |
 | **Total (idle)** | **~5–10 MB** | | Only meta/store in memory |
-| **Total (active)** | **~550 MB – 1.1 GB** | | Model + index loaded |
+| **Total (active)** | **~60–90 MB** | | Model + index loaded |
 
 ---
 

@@ -17,7 +17,7 @@ This command does three things:
 1. Downloads the `turbocode-mcp` package
 2. Runs the **postinstall script**, which:
    - Creates an isolated Python virtual environment at `.venv/`
-   - Installs `fastmcp`, `turbovec`, `sentence-transformers`, and `numpy`
+   - Installs `fastmcp`, `turbovec`, `fastembed`, and `numpy`
 3. Makes the `turbocode-mcp` command available on your PATH
 
 No manual `pip install` or `python -m venv` required.

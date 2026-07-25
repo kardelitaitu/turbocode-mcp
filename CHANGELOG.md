@@ -16,7 +16,7 @@
 - **Background indexing worker** — daemon thread, 5-file batches, 1s interval
 - **Incremental indexing** — skip unchanged files via mtime comparison
 - **Stale file re-indexing** — idle worker refreshes files older than 7 days
-- **Lazy loading** — model, index, and sentence_transformers import all load on first use only (instant startup, no cold imports)
+- **Lazy loading** — model, index, and embedding model import all load on first use only (instant startup, no cold imports)
 - **Idle shutdown watchdog** — exits after 30 minutes of inactivity; client auto-restarts
 - **Signal handling** — SIGINT/SIGTERM persist state before exit
 - **Three MCP tools:** `index_directory`, `search_codebase`, `get_index_stats`
@@ -37,9 +37,9 @@
 - **Wrapped `persist_all` in try/except in background worker** — a disk failure no longer kills the worker thread; error is logged and counter incremented.
 - **Worker now tracks `processed` count** — `worker_state["processed"]` was never incremented. Each successfully processed file now increments it.
 - **Worker sets `worker_state["status"]`** — switches between `"idle"` and `"indexing"` as the queue drains/fills.
-- **Lazy import of sentence_transformers** — moved from module-level to inside `ensure_model()`, reducing cold startup from ~10s to <0.5s.
+- **Lazy import of embedding model** — moved from module-level to inside `ensure_model()`, reducing cold startup from ~10s to <0.5s.
 - **Integration test transport** — FastMCP 3.x uses newline-delimited JSON, not `Content-Length` headers. Fixed `_send`/`_recv` accordingly.
-- **Test performance** — added `mock_model`/`mock_index` fixtures to 7 `index_directory` tests that were loading the real SentenceTransformer model, cutting unit test time from 54s to 6.8s.
+- **Test performance** — added `mock_model`/`mock_index` fixtures to 7 `index_directory` tests that were loading the real embedding model, cutting unit test time from 54s to 6.8s.
 - **None-guards in `handle_index` and `handle_remove`** — return early if `model` or `index` is None, preventing AttributeError crashes when called without `ensure_resources()`.
 - **`os.walk` PermissionError guard** — `index_directory` now catches `PermissionError` and returns a descriptive error instead of crashing.
 - **`search_codebase` empty query guard** — returns `"Error: Query cannot be empty."` for empty/whitespace-only input.
@@ -85,6 +85,6 @@
 
 ### Known Issues
 
-- First search/index call is ~5s (sentence-transformers model load — unavoidable cold start of the ~80MB model)
+- First search/index call is ~5s (fastembed model load — unavoidable cold start of the ~30MB model)
 - Index is shared across all indexed directories (no multi-project isolation)
 - File-level chunking only (2000-char truncation, no semantic splitting)

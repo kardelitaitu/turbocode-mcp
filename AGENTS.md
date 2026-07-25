@@ -21,7 +21,7 @@ TurboCode MCP is a **globally-installable npm package** that provides a local co
 | CLI entry | JavaScript (Node.js) | Spawns Python process |
 | MCP server | Python (FastMCP) | Tools + Resources |
 | Vector index | Turbovec (IdMapIndex) | 4-bit quantized search |
-| Embeddings | sentence-transformers (all-MiniLM-L6-v2) | 384-dim local embeddings |
+| Embeddings | fastembed (BAAI/bge-small-en-v1.5) | 384-dim local embeddings |
 
 ---
 
@@ -104,7 +104,7 @@ meta = {}             # Loaded at startup (small JSON)
 store = {}            # Loaded at startup (small JSON)
 ```
 
-- `sentence_transformers` is **imported inside `ensure_model()`**, not at module level — this keeps cold startup under 0.5s instead of ~10s.
+- `fastembed` is **imported inside `ensure_model()`**, not at module level — this keeps cold startup under 0.5s instead of ~10s.
 - `get_index_stats()` and `turbocode://status`/`turbocode://stats` must **never** trigger a model or index load
 - Only `search_codebase()` and `index_directory()` call `ensure_resources()`
 

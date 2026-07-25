@@ -16,7 +16,7 @@ We analyzed the viability, identified the core problems, and restructured everyt
 
 - **Turbovec has built-in persistence** (`write()` / `load()`), but `load()` is a **classmethod** — the instance method produces a broken index. This was verified experimentally.
 - **5 vectors × 384 dims** with 4-bit quantization = ~4KB on disk. 10,000 vectors = ~2MB. Storage is not a concern.
-- **`sentence-transformers` (`all-MiniLM-L6-v2`)** uses ~500MB–1GB RAM. This is the memory bottleneck, not the index.
+- **`fastembed` (`BAAI/bge-small-en-v1.5`)** uses ~30MB RAM, significantly lighter than the old sentence-transformers model.
 
 ### Decisions made
 
@@ -107,7 +107,7 @@ Expanded the test suite from 0 to **95 Python tests** + **20 JS tests** across 3
 | **node:test over mocha/jest** | Zero dependencies, built into Node ≥18, sufficient for CLI tests |
 | **Subprocess testing for CLI** over require | `cli.js` runs `main()` on import, subprocess avoids side effects |
 | **Edge case tests in same file** | Co-location makes coverage easier to reason about |
-| **Mock-based indexing tests** (not real model) | sentence-transformers is 500MB+ RAM, too heavy for test suite |
+| **Mock-based indexing tests** (not real model) | Real embedding model adds latency and dependency complexity, mocks keep tests fast |
 
 ### Open questions
 

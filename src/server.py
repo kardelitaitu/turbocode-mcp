@@ -1,7 +1,7 @@
 """
 TurboCode MCP — Local codebase vector search MCP server.
 
-Powered by FastMCP, Turbovec, and sentence-transformers.
+Powered by FastMCP, Turbovec, and fastembed.
 Fully local, no cloud, no API keys.
 """
 
@@ -209,7 +209,7 @@ def validate_python_version() -> None:
 
 def validate_imports() -> None:
     """Verify critical lightweight Python packages are importable.
-    Heavy packages (sentence-transformers, turbovec) are checked at
+    Heavy packages (fastembed, turbovec) are checked at
     first-use time to keep cold start under 0.5s.
     """
     missing = []

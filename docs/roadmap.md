@@ -35,7 +35,7 @@
 
 - [ ] Pin `fastmcp>=0.2.0`
 - [ ] Pin `turbovec>=0.8.0`
-- [ ] Pin `sentence-transformers>=3.0.0`
+- [ ] Pin `fastembed>=0.3.0`
 - [ ] Pin `numpy>=1.24.0`
 
 **Acceptance:** `pip install -r requirements.txt` succeeds
@@ -87,7 +87,7 @@
 
 ### 2.3 — Lazy Loading Helpers
 
-- [ ] `ensure_model()` — loads `SentenceTransformer` on first call
+- [ ] `ensure_model()` — loads `TextEmbedding` (fastembed) on first call
 - [ ] `ensure_index()` — loads `IdMapIndex.load(INDEX_PATH)` or creates empty
 - [ ] `ensure_resources()` — calls both helpers
 - [ ] All three functions are safe to call multiple times (idempotent)

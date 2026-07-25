@@ -10,7 +10,7 @@
 ```
 fastmcp>=0.2.0              # MCP protocol layer (Python)
 turbovec>=0.8.0             # Vector index with 4-bit quantization
-sentence-transformers>=3.0.0  # Local embedding model
+fastembed>=0.3.0              # Local embedding model
 numpy>=1.24.0               # Array operations
 ```
 
@@ -92,14 +92,16 @@ index.remove(id)       # True if removed, False if not found
 ## Lazy Loading System
 
 ```python
-model: SentenceTransformer | None = None
+from fastembed import TextEmbedding
+
+model: TextEmbedding | None = None
 index: IdMapIndex | None = None
 
 def ensure_model():
     global model
     if model is not None:
         return
-    model = SentenceTransformer('all-MiniLM-L6-v2')
+    model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 
 def ensure_index():
     global index
@@ -619,7 +621,7 @@ def index_stats() -> str:
         "errors": worker_state["errors"],
         "last_error": worker_state["last_error"],
         "model_loaded": model is not None,
-        "model": "all-MiniLM-L6-v2",
+        "model": "BAAI/bge-small-en-v1.5",
     }
     return json.dumps(stats, indent=2)
 ```
