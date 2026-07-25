@@ -6,6 +6,15 @@
   "bin": {
     "turbocode-mcp": "./bin/cli.js"
   },
+  "files": [
+    "bin/",
+    "src/**/*.py",
+    "scripts/",
+    "requirements.txt",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "postinstall": "node ./scripts/setup.js",
     "test": "npm run test:py && npm run test:js",

@@ -58,11 +58,11 @@ EXAMPLES:
     turbocode-mcp --debug
         Start the server with verbose debug logging.
 
-CONFIGURATION:
+    CONFIGURATION:
     Add to Claude Desktop (claude_desktop_config.json):
     {
         "mcpServers": {
-            "turbovec-search": {
+            "turbocode-mcp": {
                 "command": "turbocode-mcp"
             }
         }
