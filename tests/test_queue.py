@@ -720,7 +720,9 @@ class TestDequeueBatchBenchmark:
         for p in priorities:
             actual_counts[p] = actual_counts.get(p, 0) + 1
         for p in expected_counts:
-            assert actual_counts[p] == expected_counts[p], f"{p}: expected {expected_counts[p]}, got {actual_counts.get(p, 0)}"
+            assert actual_counts[p] == expected_counts[p], (
+                f"{p}: expected {expected_counts[p]}, got {actual_counts.get(p, 0)}"
+            )
 
         # BATCH_SIZE=5, 2000 items → exactly 400 batches
         assert batches == 400, f"Expected 400 batches (2000/5), got {batches}"
@@ -788,7 +790,7 @@ class TestDequeueBatchBenchmark:
         # With O(n log k) the ratio should be ~2x. Allow 5x for noisy CI.
         assert ratio < 5.0, (
             f"Scaling ratio {ratio:.2f}x (2000/1000) indicates potential performance regression. "
-            f"Times: 1000={times[1000]*1e6:.0f}µs, 2000={times[2000]*1e6:.0f}µs"
+            f"Times: 1000={times[1000] * 1e6:.0f}µs, 2000={times[2000] * 1e6:.0f}µs"
         )
 
     def test_drain_empty_queue_is_instant(self):

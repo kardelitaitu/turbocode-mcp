@@ -41,14 +41,37 @@ CHECK_INTERVAL = 60  # seconds between idle checks
 
 # Directories to skip when scanning (common non-source dirs)
 SKIP_DIRS = {
-    ".venv", "venv", "env", "node_modules", ".git", "__pycache__",
-    ".pytest_cache", ".ruff_cache", ".mypy_cache", ".hypothesis",
-    "build", "dist", ".eggs", "egg-info", ".tox", ".nox",
+    ".venv",
+    "venv",
+    "env",
+    "node_modules",
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".hypothesis",
+    "build",
+    "dist",
+    ".eggs",
+    "egg-info",
+    ".tox",
+    ".nox",
 }
 
 # Supported file extensions for indexing (case-insensitive)
 SUPPORTED_EXTENSIONS: tuple[str, ...] = (
-    ".py", ".rs", ".md", ".txt", ".js", ".ts", ".go", ".toml", ".json", ".yaml", ".yml",
+    ".py",
+    ".rs",
+    ".md",
+    ".txt",
+    ".js",
+    ".ts",
+    ".go",
+    ".toml",
+    ".json",
+    ".yaml",
+    ".yml",
 )
 
 # Lazy-loaded globals
@@ -1192,8 +1215,7 @@ def auto_index_on_startup() -> None:
     norm_ws = os.path.normpath(workspace) + os.sep
     with index_lock:
         removed_files = [
-            p for p in list(meta.keys())
-            if os.path.normpath(p).startswith(norm_ws) and not os.path.exists(p)
+            p for p in list(meta.keys()) if os.path.normpath(p).startswith(norm_ws) and not os.path.exists(p)
         ]
 
     # Enqueue

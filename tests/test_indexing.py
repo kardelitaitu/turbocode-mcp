@@ -1322,6 +1322,8 @@ class TestSignalHandlerNoDeadlock:
         mock_persist_locked = mocker.patch("server._persist_locked")
         mock_exit = mocker.patch("server.os._exit")
         mocker.patch("server.log")
+        # Avoid scanning the real project during auto-index (not what we're testing).
+        mocker.patch("server.auto_discover_workspace", return_value=None)
         mocker.patch("server.sig_module.signal")
         mocker.patch("server.validate_environment")
         mocker.patch("os.makedirs")
@@ -1347,6 +1349,10 @@ class TestSignalHandlerNoDeadlock:
         mock_persist_locked = mocker.patch("server._persist_locked")
         mock_exit = mocker.patch("server.os._exit")
         mocker.patch("server.log")
+        # Prevent auto_index_on_startup from deadlocking on index_lock
+        # (auto_discover_workspace finds our project root which would trigger
+        # auto-index's meta_snapshot under index_lock, which we already hold).
+        mocker.patch("server.auto_discover_workspace", return_value=None)
         server.index_lock.acquire()
         try:
             server._stop_event.set()

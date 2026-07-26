@@ -758,10 +758,7 @@ class TestWorkerStatusTransitionsDetailed:
         mock_index.add_with_ids.side_effect = None
         mock_index.add_with_ids.return_value = None
         # Make encoding take long enough for multiple sleep iterations
-        mock_model.encode.side_effect = lambda *a, **kw: (
-            time.sleep(0.05)
-            or np.random.rand(1, 384).astype(np.float32)
-        )
+        mock_model.encode.side_effect = lambda *a, **kw: time.sleep(0.05) or np.random.rand(1, 384).astype(np.float32)
         f = tmp_path / "f.py"
         f.write_text("x")
         server.current_id = 1

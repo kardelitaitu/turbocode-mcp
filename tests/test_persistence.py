@@ -109,10 +109,12 @@ class TestPersistAllPartialFailure:
         server.index = mock_index
         # Only fail os.replace for the INDEX_PATH; meta/store atomic_write uses real os.replace
         real_replace = os.replace
+
         def flaky_replace(src, dst):
             if src == server.INDEX_PATH + ".tmp":
                 raise OSError("cross-device")
             return real_replace(src, dst)
+
         mocker.patch("os.replace", side_effect=flaky_replace)
         server.persist_all()
         assert not os.path.exists(server.INDEX_PATH)  # .tmp might exist but index not in place
