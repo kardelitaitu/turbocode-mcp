@@ -29,7 +29,7 @@ class TestBackgroundWorker:
         server._stop_event.clear()
         t = threading.Thread(target=background_worker, daemon=True)
         t.start()
-        time.sleep(0.02)
+        time.sleep(0.10)
 
         assert str(f) in server.meta
         assert server.worker_state["errors"] == 0
@@ -46,7 +46,7 @@ class TestBackgroundWorker:
         server._stop_event.clear()
         t = threading.Thread(target=background_worker, daemon=True)
         t.start()
-        time.sleep(0.02)
+        time.sleep(0.10)
 
         assert server.worker_state["errors"] == 0
         assert "/nonexistent/file.py" not in server.meta

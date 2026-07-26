@@ -1,3 +1,4 @@
+import contextlib
 import os
 import sys
 
@@ -15,6 +16,11 @@ def clean_globals():
     import server
 
     server._stop_event.set()
+    # Stop the embed subprocess if a previous test loaded the real model.
+    # (Just setting model=None orphans the subprocess, leaking resources.)
+    if server.model is not None and hasattr(server.model, "stop"):
+        with contextlib.suppress(Exception):
+            server.model.stop()
     server.model = None
     server.index = None
     server.meta = {}

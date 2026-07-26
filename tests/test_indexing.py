@@ -1615,6 +1615,8 @@ class TestHandleSignalSigterm:
 
         mocker.patch("server.os._exit")
         mocker.patch("server.log")
+        # Skip real project scan during auto-index (not what we're testing).
+        mocker.patch("server.auto_discover_workspace", return_value=None)
         mocker.patch("server.validate_environment")
         mocker.patch("os.makedirs")
         mocker.patch("server.load_and_verify")
