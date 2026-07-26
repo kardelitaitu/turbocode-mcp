@@ -8,6 +8,7 @@ Fully local, no cloud, no API keys.
 from __future__ import annotations
 
 import contextlib
+import heapq
 import json
 import math
 import os
@@ -44,6 +45,11 @@ SKIP_DIRS = {
     ".pytest_cache", ".ruff_cache", ".mypy_cache", ".hypothesis",
     "build", "dist", ".eggs", "egg-info", ".tox", ".nox",
 }
+
+# Supported file extensions for indexing (case-insensitive)
+SUPPORTED_EXTENSIONS: tuple[str, ...] = (
+    ".py", ".rs", ".md", ".txt", ".js", ".ts", ".go", ".toml", ".json", ".yaml", ".yml",
+)
 
 # Lazy-loaded globals
 MODEL_NAME: str = "BAAI/bge-small-en-v1.5"
@@ -251,6 +257,17 @@ def validate_environment() -> None:
 # ═══════════════════════════════════════════════════════════════
 
 
+def _sync_file(path: str) -> None:
+    """Cross-platform fsync of a file. Opens for write-append on Windows
+    (required for fsync), read-binary on POSIX."""
+    try:
+        mode = "ab" if os.name == "nt" else "rb"
+        with open(path, mode) as f:
+            os.fsync(f.fileno())
+    except Exception:
+        pass  # Best-effort; the os.replace below is the real atomicity guarantee
+
+
 def atomic_write(path: str, data: str) -> None:
     """Write data to a file atomically using temp file + rename."""
     tmp_path = path + ".tmp"
@@ -273,26 +290,37 @@ def _persist_locked() -> None:
         return
 
     # Index (atomic via temp file + replace)
+    index_error = None
     try:
-        index.write(INDEX_PATH + ".tmp")
-        os.replace(INDEX_PATH + ".tmp", INDEX_PATH)
+        tmp_index = INDEX_PATH + ".tmp"
+        index.write(tmp_index)
+        # fsync temp file for durability (POSIX: read fd works; Windows: needs write fd)
+        _sync_file(tmp_index)
+        os.replace(tmp_index, INDEX_PATH)
     except Exception as e:
         log(f"WARNING: Failed to persist index: {e}")
-        # Continue to persist meta/store — any inconsistency is
-        # repaired by load_and_verify() on the next restart.
+        index_error = e
 
     # Meta
+    meta_error = None
     try:
         atomic_write(META_PATH, json.dumps(meta, indent=2, default=str))
     except Exception as e:
         log(f"WARNING: Failed to persist meta: {e}")
+        meta_error = e
 
     # Store (convert int keys to strings for JSON)
+    store_error = None
     try:
         store_serializable = {str(k): v for k, v in store.items()}
         atomic_write(STORE_PATH, json.dumps(store_serializable, indent=2, default=str))
     except Exception as e:
         log(f"WARNING: Failed to persist store: {e}")
+        store_error = e
+
+    # If all three failed, raise to let caller detect catastrophic failure
+    if index_error and meta_error and store_error:
+        raise RuntimeError("All persistence targets failed") from index_error
 
 
 def persist_all() -> None:
@@ -382,23 +410,41 @@ def enqueue(priority: str, file_path: str) -> None:
 
 
 def dequeue_batch(batch_size: int = BATCH_SIZE) -> list[tuple[str, str]]:
-    """Thread-safe priority dequeue. Returns up to batch_size items."""
+    """Thread-safe priority dequeue using heap selection (O(n log k)).
+
+    Uses heapq.nsmallest on indices to handle duplicates correctly.
+    When batch_size >= queue length, falls back to full sort.
+    """
     with queue_lock:
         if not index_queue:
             return []
-
-        priority_order = {"remove": 0, "new": 1, "changed": 2, "reindex": 3}
-        items = list(index_queue)
-        items.sort(key=lambda x: priority_order.get(x[0], 99))
-        index_queue.clear()
 
         try:
             safe_size = max(0, int(batch_size))
         except (ValueError, OverflowError, TypeError):
             safe_size = 0
-        batch = items[:safe_size]
-        remaining = items[safe_size:]
-        index_queue.extend(remaining)
+
+        if safe_size <= 0:
+            return []
+
+        priority_order = {"remove": 0, "new": 1, "changed": 2, "reindex": 3}
+        items = list(index_queue)
+        index_queue.clear()
+
+        if safe_size >= len(items):
+            # Drain everything — full sort since we return all items
+            items.sort(key=lambda x: priority_order.get(x[0], 99))
+            return items
+
+        # k < n: select by (priority, original_index) for stable ordering and
+        # correct duplicate handling (indices are unique, values might not be)
+        def _sort_key(i: int) -> tuple:
+            return (priority_order.get(items[i][0], 99), i)
+
+        selected = set(heapq.nsmallest(safe_size, range(len(items)), key=_sort_key))
+        batch = [items[i] for i in sorted(selected, key=_sort_key)]
+        index_queue.extend(items[i] for i in range(len(items)) if i not in selected)
+
     return batch
 
 
@@ -442,7 +488,6 @@ def handle_remove(file_path: str) -> None:
 
 def handle_index(file_path: str) -> None:
     """Index a file. I/O and embedding outside lock. Lock only for mutations."""
-    global current_id
 
     if model is None or index is None:
         log(f"WARNING: Model or index not loaded. Skipping {file_path}.")
@@ -479,6 +524,8 @@ def handle_index(file_path: str) -> None:
 
     # Critical section: lock only for mutations
     with index_lock:
+        global current_id
+
         # Stat first to avoid orphaning old entry on stat failure
         try:
             mtime = os.path.getmtime(file_path)
@@ -689,7 +736,11 @@ def _is_gitignored(filepath: str, specs: list[tuple[str, pathspec.PathSpec]]) ->
 
 @mcp.tool
 def index_directory(directory_path: str, respect_gitignore: bool = True) -> str:
-    """Scan and queue files for background indexing."""
+    """Scan and queue files for background indexing.
+
+    Supports .py, .rs, .md, .txt, .js, .ts, .go, .toml, .json, .yaml, .yml.
+    Skips gitignored files by default.
+    """
     touch()
 
     if not isinstance(directory_path, str) or not directory_path.strip():
@@ -708,8 +759,6 @@ def index_directory(directory_path: str, respect_gitignore: bool = True) -> str:
     changed_files: list[str] = []
     removed_files: list[str] = []
 
-    supported_ext = (".py", ".rs", ".md", ".txt")
-
     # Snapshot meta once to avoid O(n) lock acquisitions during walk
     with index_lock:
         meta_snapshot = dict(meta)
@@ -722,7 +771,7 @@ def index_directory(directory_path: str, respect_gitignore: bool = True) -> str:
         for root, dirs, files in os.walk(directory_path, followlinks=False):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
             for f in files:
-                if not f.lower().endswith(supported_ext):
+                if not f.lower().endswith(SUPPORTED_EXTENSIONS):
                     continue
                 fp = os.path.normpath(os.path.join(root, f))
                 if respect_gitignore and _is_gitignored(fp, gitignore_specs):
@@ -866,84 +915,6 @@ def get_index_stats() -> str:
 
 
 @mcp.tool
-def index_workspace(directory_path: str) -> str:
-    """Recursively scan and index code files (.py, .rs, .js, .ts, .md) in a workspace."""
-    touch()
-
-    if not isinstance(directory_path, str) or not directory_path.strip():
-        return "Error: Directory path cannot be empty."
-    if not os.path.exists(directory_path):
-        return f"Error: Directory '{directory_path}' not found."
-    if not os.path.isdir(directory_path):
-        return f"Error: '{directory_path}' is a file, not a directory."
-
-    ensure_resources()
-
-    supported_ext = (".py", ".rs", ".js", ".ts", ".md")
-
-    new_files: list[str] = []
-    changed_files: list[str] = []
-
-    with index_lock:
-        meta_snapshot = dict(meta)
-
-    try:
-        for root, dirs, files in os.walk(directory_path, followlinks=False):
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-            for f in files:
-                if not f.lower().endswith(supported_ext):
-                    continue
-                fp = os.path.normpath(os.path.join(root, f))
-                tracked_info = meta_snapshot.get(fp)
-                tracked = tracked_info is not None
-                tracked_mtime = tracked_info.get("mtime", 0) if isinstance(tracked_info, dict) else None
-                if not tracked:
-                    new_files.append(fp)
-                else:
-                    try:
-                        file_mtime = os.path.getmtime(fp)
-                    except OSError:
-                        continue
-                    if tracked_mtime != file_mtime:
-                        changed_files.append(fp)
-    except PermissionError:
-        return f"Error: Permission denied reading directory '{directory_path}'."
-    except OSError as e:
-        return f"Error: Cannot read directory '{directory_path}': {e}"
-
-    norm_dir = os.path.normpath(directory_path)
-    separator = os.sep
-    with index_lock:
-        removed_files = [
-            p
-            for p in list(meta.keys())
-            if os.path.normpath(p).startswith(norm_dir + separator) and not os.path.exists(p)
-        ]
-
-    for f in removed_files:
-        enqueue("remove", f)
-    for f in changed_files:
-        enqueue("changed", f)
-    for f in new_files:
-        enqueue("new", f)
-
-    parts = []
-    if new_files:
-        parts.append(f"{len(new_files)} new")
-    if changed_files:
-        parts.append(f"{len(changed_files)} changed")
-    if removed_files:
-        parts.append(f"{len(removed_files)} to remove")
-
-    if not parts:
-        tracked_here = sum(1 for p in meta if os.path.normpath(p).startswith(norm_dir + separator))
-        return f"All {tracked_here} files up to date."
-
-    total = len(new_files) + len(changed_files) + len(removed_files)
-    return f"Queued {total} files ({', '.join(parts)}) for indexing."
-
-
-@mcp.tool
 def update_file_index(file_path: str) -> str:
     """Re-index a single file immediately. Call after modifying a file."""
     touch()
@@ -968,29 +939,6 @@ def update_file_index(file_path: str) -> str:
 
 
 @mcp.tool
-def get_index_status() -> str:
-    """Check the current index state: file count, vector count, directories tracked."""
-    touch()
-
-    with index_lock:
-        vcount = len(store)
-        fcount = len(meta)
-
-    dirs = set(os.path.dirname(p) for p in meta)
-    qdepth = queue_depth()
-
-    return (
-        f"Index Status\n"
-        f"- Files tracked: {fcount}\n"
-        f"- Vectors: {vcount}\n"
-        f"- Directories: {len(dirs)}\n"
-        f"- Worker: {worker_state['status']} "
-        f"({qdepth} queued, {worker_state['processed']} processed, "
-        f"{worker_state['errors']} errors)"
-    )
-
-
-@mcp.tool
 def drop_index() -> str:
     """Clear the entire index from memory and disk."""
     touch()
@@ -1007,53 +955,6 @@ def drop_index() -> str:
     persist_all()
 
     return "Index cleared."
-
-
-@mcp.tool
-def semantic_search(query: str, top_k: int = 5) -> str:
-    """Semantic search across indexed code. Returns file paths and similarity scores."""
-    touch()
-
-    if not isinstance(query, str) or not query.strip():
-        return "Error: Query cannot be empty."
-
-    if not isinstance(top_k, int) or top_k < 1:
-        top_k = 1
-    elif top_k > 20:
-        top_k = 20
-
-    with index_lock:
-        if not store:
-            return "Index is empty. Use index_directory() or index_workspace() first."
-
-    ensure_resources()
-
-    query_vec = model.encode([query])
-    if query_vec is None or query_vec.size == 0:
-        return f"Error: Failed to embed query '{query}'."
-
-    with index_lock:
-        scores, ids = index.search(query_vec, k=top_k)
-
-    results: list[str] = []
-    for score, doc_id in zip(scores[0], ids[0], strict=False):
-        with index_lock:
-            doc = store.get(int(doc_id))
-        if doc and isinstance(doc, dict):
-            file_path = doc.get("path", "unknown")
-            content = doc.get("content", "")
-            if not isinstance(content, str):
-                content = str(content) if content is not None else ""
-            display = content[:500]
-            suffix = "..." if len(content) > 500 else ""
-            results.append(f"**{file_path}** (score: {score:.4f})\n```\n{display}{suffix}\n```")
-
-    if not results:
-        remaining = queue_depth()
-        hint = f"\n*Note: {remaining} files still queued.*" if remaining else ""
-        return f"No results found for '{query}'.{hint}"
-
-    return "\n\n---\n\n".join(results)
 
 
 @mcp.tool
@@ -1102,6 +1003,44 @@ def keyword_search(keyword: str, file_extension_filter: str = "") -> str:
             result += f"... and {len(matches) - max_results} more matches."
 
         return result
+
+
+# ── Backward-compatible aliases ──
+
+
+@mcp.tool
+def index_workspace(directory_path: str) -> str:
+    """[Deprecated] Use index_directory instead. Index without gitignore filtering."""
+    return index_directory(directory_path, respect_gitignore=False)
+
+
+@mcp.tool
+def semantic_search(query: str, top_k: int = 5) -> str:
+    """[Deprecated] Use search_codebase instead."""
+    return search_codebase(query, k=top_k)
+
+
+@mcp.tool
+def get_index_status() -> str:
+    """[Deprecated] Use get_index_stats instead."""
+    touch()
+    with index_lock:
+        vcount = len(store)
+        fcount = len(meta)
+    dirs = set(os.path.dirname(p) for p in meta)
+    qdepth = queue_depth()
+    return (
+        f"Index Status\n"
+        f"- Files tracked: {fcount}\n"
+        f"- Vectors: {vcount}\n"
+        f"- Directories: {len(dirs)}\n"
+        f"- Worker: {worker_state['status']} "
+        f"({qdepth} queued, {worker_state['processed']} processed, "
+        f"{worker_state['errors']} errors)"
+    )
+
+
+# ── File Access Tool ──
 
 
 @mcp.tool
@@ -1219,7 +1158,7 @@ def auto_index_on_startup() -> None:
         return
 
     log(f"Auto-indexing workspace: {workspace}")
-    supported_ext = (".py", ".rs", ".md", ".txt", ".js", ".ts", ".go", ".toml", ".json", ".yaml", ".yml")
+    supported_ext = SUPPORTED_EXTENSIONS
 
     # Snapshot meta for O(1) lookups during walk
     with index_lock:
@@ -1270,9 +1209,12 @@ def auto_index_on_startup() -> None:
         log("All files up to date.")
     else:
         parts = []
-        if new_files: parts.append(f"{len(new_files)} new")
-        if changed_files: parts.append(f"{len(changed_files)} changed")
-        if removed_files: parts.append(f"{len(removed_files)} to remove")
+        if new_files:
+            parts.append(f"{len(new_files)} new")
+        if changed_files:
+            parts.append(f"{len(changed_files)} changed")
+        if removed_files:
+            parts.append(f"{len(removed_files)} to remove")
         log(f"Queued {total} files ({', '.join(parts)}) for indexing.")
 
 

@@ -757,6 +757,11 @@ class TestWorkerStatusTransitionsDetailed:
         mock_index.write.side_effect = lambda p: open(p, "w").close()
         mock_index.add_with_ids.side_effect = None
         mock_index.add_with_ids.return_value = None
+        # Make encoding take long enough for multiple sleep iterations
+        mock_model.encode.side_effect = lambda *a, **kw: (
+            time.sleep(0.05)
+            or np.random.rand(1, 384).astype(np.float32)
+        )
         f = tmp_path / "f.py"
         f.write_text("x")
         server.current_id = 1
@@ -767,7 +772,7 @@ class TestWorkerStatusTransitionsDetailed:
 
         def tracking_sleep(s):
             statuses.append(server.worker_state["status"])
-            if len(statuses) >= 5:
+            if len(statuses) >= 8:
                 server._stop_event.set()
             original_sleep(min(s, 0.02))
 
@@ -775,8 +780,8 @@ class TestWorkerStatusTransitionsDetailed:
         t = threading.Thread(target=server.background_worker, daemon=True)
         t.start()
         t.join(timeout=3)
-        assert "indexing" in statuses
-        assert "idle" in statuses
+        assert "indexing" in statuses, f"statuses: {statuses}"
+        assert "idle" in statuses, f"statuses: {statuses}"
 
 
 class TestBackgroundWorkerReindexOnly:

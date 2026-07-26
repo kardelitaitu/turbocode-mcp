@@ -305,7 +305,7 @@ describe('Runtime behavior', () => {
 
     assert.strictEqual(spawnCalls.length, 1);
     assert.strictEqual(spawnCalls[0].command, pythonPath);
-    assert.deepStrictEqual(spawnCalls[0].args, [serverPath, '--debug']);
+    assert.deepStrictEqual(spawnCalls[0].args, [serverPath, '--stdio', '--debug']);
     assert.strictEqual(spawnCalls[0].options.stdio, 'inherit');
     assert.ok(spawnCalls[0].options.env.PATH || spawnCalls[0].options.env.Path);
     assert.strictEqual(typeof signals.SIGINT, 'function');
@@ -658,7 +658,7 @@ describe('Runtime behavior', () => {
 
       assert.strictEqual(spawnCalls.length, 1);
       assert.strictEqual(spawnCalls[0].cmd, '/fake/python');
-      assert.deepStrictEqual(spawnCalls[0].args, ['/fake/server.py']);
+      assert.deepStrictEqual(spawnCalls[0].args, ['/fake/server.py', '--stdio']);
     } finally {
       process.argv = originalArgv;
       process.on = originalOn;
@@ -853,7 +853,7 @@ describe('Runtime behavior', () => {
       });
 
       assert.strictEqual(spawnCalls.length, 1);
-      assert.deepStrictEqual(spawnCalls[0].args, ['/fake/server.py', '--debug']);
+      assert.deepStrictEqual(spawnCalls[0].args, ['/fake/server.py', '--stdio', '--debug']);
     } finally {
       process.on = originalOn;
     }
@@ -879,7 +879,7 @@ describe('Runtime behavior', () => {
       });
 
       assert.strictEqual(spawnCalls.length, 1);
-      assert.deepStrictEqual(spawnCalls[0].args, ['/fake/server.py']);
+      assert.deepStrictEqual(spawnCalls[0].args, ['/fake/server.py', '--stdio']);
     } finally {
       process.on = originalOn;
     }

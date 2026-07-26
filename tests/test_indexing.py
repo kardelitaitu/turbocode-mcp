@@ -121,9 +121,9 @@ class TestToolIndexDirectory:
         result = server.index_directory(str(sample_dir))
 
         assert "queued" in result.lower()
-        # Should find 5 supported files (main.py, lib.rs, readme.md, notes.txt, subdir/mod.py)
-        # 4 in root + 1 ignored (.js) + 1 in subdir
-        assert server.queue_depth() == 5
+        # sample_dir has 6 supported files: main.py, lib.rs, readme.md, notes.txt,
+        # ignored.js (now included), subdir/mod.py
+        assert server.queue_depth() == 6
 
     def test_up_to_date_on_repeat(self, sample_dir, mock_model, mock_index):
         mock_index.write.side_effect = lambda p: open(p, "w").close()
@@ -253,7 +253,6 @@ class TestIndexDirectoryEdgeCases:
     def test_unsupported_files_only(self, tmp_path, mock_model, mock_index):
         d = tmp_path / "web_project"
         d.mkdir()
-        (d / "app.js").write_text("console.log('hi')")
         (d / "style.css").write_text("body { color: red }")
         (d / "index.html").write_text("<html></html>")
 
@@ -354,8 +353,8 @@ class TestIndexDirectoryAdditionalEdgeCases:
         result = server.index_directory(str(sample_dir))
         parts = result.split()
         num = int(parts[1]) if parts[1].isdigit() else 0
-        assert num == 5
-        assert server.queue_depth() == 5
+        assert num == 6
+        assert server.queue_depth() == 6
 
     def test_twice_in_a_row_queues_once(self, tmp_path, mock_model, mock_index):
         mock_index.write.side_effect = lambda p: open(p, "w").close()

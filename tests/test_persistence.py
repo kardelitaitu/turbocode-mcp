@@ -107,9 +107,18 @@ class TestPersistAllEdgeCases:
 class TestPersistAllPartialFailure:
     def test_index_write_succeeds_replace_fails(self, mocker, mock_index, populated_state):
         server.index = mock_index
-        mocker.patch("os.replace", side_effect=OSError("cross-device"))
+        # Only fail os.replace for the INDEX_PATH; meta/store atomic_write uses real os.replace
+        real_replace = os.replace
+        def flaky_replace(src, dst):
+            if src == server.INDEX_PATH + ".tmp":
+                raise OSError("cross-device")
+            return real_replace(src, dst)
+        mocker.patch("os.replace", side_effect=flaky_replace)
         server.persist_all()
         assert not os.path.exists(server.INDEX_PATH)  # .tmp might exist but index not in place
+        # meta/store succeeded since os.replace works for those paths
+        assert os.path.exists(server.META_PATH)
+        assert os.path.exists(server.STORE_PATH)
 
     def test_persist_all_continues_after_meta_failure(self, mocker, mock_index, populated_state):
         server.index = mock_index
@@ -565,14 +574,56 @@ class TestPersistLockedEdgeCases:
         assert os.path.exists(server.STORE_PATH)
 
 
-class TestPersistLockedMetaAndStoreBothFail:
-    """_persist_locked handles simultaneous meta and store failures."""
+class TestPersistLockedAllThreeFail:
+    """_persist_locked raises RuntimeError when index, meta, and store ALL fail."""
 
-    def test_both_fail_logs_warnings(self, mock_index, mocker):
-        server.meta["/a.py"] = {"id": 1}
-        mock_index.write.side_effect = RuntimeError("index fail")
-        mocker.patch("server.atomic_write", side_effect=RuntimeError("write fail"))
+    def test_all_three_fail_raises_runtime_error(self, mock_index, mocker):
+        mock_index.write.side_effect = RuntimeError("index write fails")
+        mocker.patch("server.atomic_write", side_effect=RuntimeError("write fails"))
+        server.meta["/a.py"] = {"id": 1, "mtime": 0, "size": 0, "last_indexed": 0}
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        with pytest.raises(RuntimeError, match="All persistence targets failed"):
+            server._persist_locked()
+
+    def test_all_three_fail_sets_last_error_in_worker(self, tmp_path, mock_model, mock_index, mocker):
+        """When the worker encounters triple-failure from persist_all, it records the error."""
+        mocker.patch.object(server, "BATCH_INTERVAL", 0.01)
+        mock_index.write.side_effect = lambda p: open(p, "w").close()
+        mock_index.add_with_ids.side_effect = None
+        mock_index.add_with_ids.return_value = None
+        mocker.patch.object(server, "persist_all", side_effect=RuntimeError("All persistence targets failed"))
+        f = tmp_path / "f.py"
+        f.write_text("x")
+        server.current_id = 1
+        server.enqueue("new", str(f))
+        server._stop_event.clear()
+        t = threading.Thread(target=server.background_worker, daemon=True)
+        t.start()
+        time.sleep(0.02)
+        server._stop_event.set()
+        t.join(timeout=2)
+        assert server.worker_state["errors"] >= 1
+        assert server.worker_state["last_error"] is not None
+
+    def test_partial_failure_two_of_three_does_not_raise(self, mock_index, mocker):
+        """If only index+meta fail but store succeeds, no RuntimeError."""
+        mock_index.write.side_effect = RuntimeError("index write fails")
+
+        call_order = []
+        real_atomic = server.atomic_write
+
+        def flaky_atomic(path, data):
+            call_order.append(path)
+            if path == server.META_PATH:
+                raise RuntimeError("meta fail")
+            real_atomic(path, data)
+
+        mocker.patch("server.atomic_write", side_effect=flaky_atomic)
+        server.meta["/a.py"] = {"id": 1, "mtime": 0, "size": 0, "last_indexed": 0}
+        server.store[1] = {"path": "/a.py", "content": "x"}
+        # Should NOT raise — store succeeded
         server._persist_locked()
+        assert os.path.exists(server.STORE_PATH)
 
 
 class TestPersistAllIndexNone:
@@ -640,6 +691,8 @@ class TestPersistLockedIndexWriteReplaceFails:
         assert os.path.exists(server.STORE_PATH)
 
     def test_replace_and_atomic_write_both_fail(self, mock_index, populated_state, mocker):
+        """All three persistence targets fail (index os.replace + meta atomic_write + store atomic_write).
+        This now triggers the RuntimeError triple-failure guard."""
         mock_index.write.side_effect = lambda p: open(p, "w").close()
         mock_replace = mocker.patch("os.replace")
 
@@ -648,7 +701,8 @@ class TestPersistLockedIndexWriteReplaceFails:
 
         mock_replace.side_effect = all_flaky
         mocker.patch("server.atomic_write", side_effect=RuntimeError("meta fail"))
-        server._persist_locked()
+        with pytest.raises(RuntimeError, match="All persistence targets failed"):
+            server._persist_locked()
 
 
 class TestAtomicWriteDoubleFailure:
@@ -755,6 +809,28 @@ class TestPersistAllNonSerializableMeta:
         server.meta["/f.py"] = {"id": 1, "tags": {"a", "b"}}
         server.persist_all()
         assert os.path.exists(server.META_PATH)
+
+
+class TestIdleWatchdogTripleFailure:
+    """Idle watchdog survives RuntimeError from persist_all (triple-failure) during shutdown."""
+
+    def test_watchdog_logs_warning_and_exits_on_triple_failure(self, mocker):
+        mock_exit = mocker.patch("server.os._exit")
+        mock_log = mocker.patch("server.log")
+        mocker.patch.object(server, "CHECK_INTERVAL", 0.01)
+        mocker.patch.object(server, "IDLE_TIMEOUT", -1)  # always timed out
+        mocker.patch.object(server, "persist_all", side_effect=RuntimeError("All persistence targets failed"))
+        server.last_activity = 0
+        server._stop_event.clear()
+        t = threading.Thread(target=server.idle_watchdog, daemon=True)
+        t.start()
+        time.sleep(0.03)
+        server._stop_event.set()
+        t.join(timeout=2)
+        # Verify the watchdog survived the error and called exit
+        mock_exit.assert_any_call(0)
+        warning_calls = [c for c in mock_log.call_args_list if "Failed to persist" in str(c)]
+        assert len(warning_calls) >= 1
 
 
 class TestConcurrentPersistAll:

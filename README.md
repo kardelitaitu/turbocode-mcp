@@ -16,7 +16,7 @@ npm install -g turbocode-mcp
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Node >=18](https://img.shields.io/badge/node->=18-green.svg)](https://nodejs.org)
 [![Python >=3.9](https://img.shields.io/badge/python->=3.9-blue.svg)](https://python.org)
-[![Tests: 667 passing](https://img.shields.io/badge/tests-667%20passing-brightgreen.svg)](https://github.com/anomalyco/turbocode-mcp)
+[![Tests: 662 passing](https://img.shields.io/badge/tests-662%20passing-brightgreen.svg)](https://github.com/anomalyco/turbocode-mcp)
 
 ---
 
@@ -154,7 +154,7 @@ Your AI assistant can now index and search your local codebase. On startup, the 
 | **Model Choice** | `--model=<name>` flag to swap embedding models (default: `BAAI/bge-small-en-v1.5`). |
 | **GPU Auto-Detect** | Uses CUDA/DirectML/CoreML automatically when `onnxruntime-gpu` is installed. |
 | **.gitignore Aware** | `index_directory` skips gitignored files by default. Opt out with `respect_gitignore=False`. |
-| **667 Tests** | 7 focused test files, all passing. Regression-gated. |
+| **662 Tests** | All passing, regression-gated. |
 | **Auto-Shutdown** | Exits after 30 idle minutes. Client auto-restarts on next call. |
 | **Self-Maintaining** | Idle worker re-indexes stale files automatically. |
 | **One-Command Install** | Python venv and dependencies set up automatically. |
@@ -180,15 +180,12 @@ Your AI assistant can now index and search your local codebase. On startup, the 
 
 | Tool | Description |
 |---|---|
-| `index_directory(path, respect_gitignore=True)` | Queue a directory for background indexing (`.py`, `.rs`, `.md`, `.txt`) |
-| `index_workspace(path)` | Queue a workspace for background indexing (`.py`, `.rs`, `.js`, `.ts`, `.md`) |
+| `index_directory(path, respect_gitignore=True)` | Queue a directory for background indexing (`.py`, `.rs`, `.md`, `.txt`, `.js`, `.ts`, `.go`, `.toml`, `.json`, `.yaml`, `.yml`) |
 | `update_file_index(path)` | Immediately re-index a single file after modification |
 | `search_codebase(query, k=3)` | Semantic search against indexed code |
-| `semantic_search(query, top_k=5)` | Semantic search alias with `top_k` parameter |
 | `keyword_search(keyword, file_extension_filter="")` | Case-insensitive exact match across indexed content — returns file paths and line numbers |
 | `read_file_content(path)` | Read a file's full unabridged content from disk |
 | `get_index_stats()` | Index health and statistics (instant, no model load) |
-| `get_index_status()` | Lightweight status — file count, vector count, directories tracked |
 | `drop_index()` | Clear the entire index from memory and disk |
 
 **Resources (auto-context for the AI):**
@@ -208,23 +205,19 @@ Synthetic benchmark: 100 generated code files, 100 search iterations, CPU embedd
 
 | Category | Metric | Value |
 |---|---|---|
-| **Indexing** | Throughput | **~55 files/sec** |
-| Indexing | Median | ~10 ms/file |
-| Indexing | P95 | ~17 ms/file |
-| Indexing | P99 | ~28 ms/file |
-| **Semantic search (k=3)** | Median | ~3.0 ms |
-| Semantic search (k=3) | P95 | ~3.9 ms |
-| Semantic search (k=3) | P99 | ~4.4 ms |
-| **Semantic search (k=5)** | Median | ~3.0 ms |
-| Semantic search (k=5) | P95 | ~3.7 ms |
-| Semantic search (k=5) | P99 | ~4.1 ms |
-| **Semantic search (k=10)** | Median | ~3.0 ms |
-| Semantic search (k=10) | P95 | ~3.7 ms |
-| Semantic search (k=10) | P99 | ~3.8 ms |
-| **Keyword search** | Median | ~0.08 ms |
-| Keyword search | P95 | ~0.11 ms |
-| Keyword search | P99 | ~0.12 ms |
-| **Cold start (model load)** | — | ~5 ms |
+| **Indexing** | Throughput | **~53 files/sec** (100 files in 1.9s) |
+| Indexing | Median | ~12 ms/file |
+| Indexing | P95 | ~21 ms/file |
+| Indexing | P99 | ~35 ms/file |
+| **Semantic search (k=3)** | Median | ~2.9 ms |
+| Semantic search (k=3) | P95 | ~3.5 ms |
+| **Semantic search (k=5)** | Median | ~2.8 ms |
+| Semantic search (k=5) | P95 | ~3.4 ms |
+| **Semantic search (k=10)** | Median | ~2.9 ms |
+| Semantic search (k=10) | P95 | ~3.3 ms |
+| **Keyword search** | Median | ~0.13 ms |
+| Keyword search | P95 | ~0.15 ms |
+| **Cold start (model load)** | — | ~7 ms |
 | **Process memory** | — | ~20 MB (Python + embed subprocess) |
 
 Run benchmarks yourself:

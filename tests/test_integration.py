@@ -103,6 +103,11 @@ class TestMCPProtocol:
         assert "index_directory" in names
         assert "search_codebase" in names
         assert "get_index_stats" in names
+        # Backward-compatible aliases also registered
+        assert "drop_index" in names
+        assert "keyword_search" in names
+        assert "read_file_content" in names
+        assert "update_file_index" in names
 
     def test_get_index_stats_tool(self, mcp_server):
         _send(
@@ -165,7 +170,8 @@ class TestMCPProtocol:
         resp = _recv(mcp_server.stdout)
         assert resp["jsonrpc"] == "2.0"
         content = resp["result"]["contents"][0]["text"]
-        assert "Ready" in content or "Idle" in content
+        # Accept Ready, Idle, or Indexing (auto-index may be running on startup)
+        assert "Ready" in content or "Idle" in content or "Indexing" in content
 
     def test_resource_stats(self, mcp_server):
         _send(

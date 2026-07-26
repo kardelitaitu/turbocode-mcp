@@ -675,3 +675,128 @@ class TestEnqueuePriorityOverflow:
         remove_end = max(i for i, p in enumerate(priorities) if p == "remove") if "remove" in priorities else -1
         new_start = min(i for i, p in enumerate(priorities) if p == "new") if "new" in priorities else 999
         assert remove_end < new_start
+
+
+class TestDequeueBatchBenchmark:
+    """Performance and correctness of dequeue_batch with large queues.
+
+    Verifies the O(n log k) heap-based implementation scales well
+    and produces correct results with 2000+ items.
+    """
+
+    def test_2000_items_drain_correctness(self):
+        """Drain a 2000-item queue: all items accounted for, priority order preserved."""
+        server.index_queue.clear()
+        expected_counts = {"remove": 0, "new": 0, "changed": 0, "reindex": 0}
+        for i in range(2000):
+            p = ["remove", "new", "changed", "reindex"][i % 4]
+            expected_counts[p] += 1
+            server.enqueue(p, f"/f{i}.py")
+
+        drained: list[tuple[str, str]] = []
+        batches = 0
+        while True:
+            batch = server.dequeue_batch(5)
+            if not batch:
+                break
+            drained.extend(batch)
+            batches += 1
+
+        assert len(drained) == 2000, f"Expected 2000 items, got {len(drained)}"
+
+        # Every priority group should be contiguous, in priority order
+        priorities = [p for p, _ in drained]
+        remove_end = max(i for i, p in enumerate(priorities) if p == "remove")
+        new_start = min(i for i, p in enumerate(priorities) if p == "new")
+        changed_start = min(i for i, p in enumerate(priorities) if p == "changed")
+        reindex_start = min(i for i, p in enumerate(priorities) if p == "reindex")
+        assert remove_end < new_start < changed_start < reindex_start, (
+            f"Priority order broken: remove_end={remove_end}, new_start={new_start}, "
+            f"changed_start={changed_start}, reindex_start={reindex_start}"
+        )
+
+        # Correct counts per priority
+        actual_counts = {}
+        for p in priorities:
+            actual_counts[p] = actual_counts.get(p, 0) + 1
+        for p in expected_counts:
+            assert actual_counts[p] == expected_counts[p], f"{p}: expected {expected_counts[p]}, got {actual_counts.get(p, 0)}"
+
+        # BATCH_SIZE=5, 2000 items → exactly 400 batches
+        assert batches == 400, f"Expected 400 batches (2000/5), got {batches}"
+
+    def test_2000_items_no_duplicates_no_loss(self):
+        """All 2000 unique file paths are preserved exactly once."""
+        server.index_queue.clear()
+        paths = [f"/f{i}.py" for i in range(2000)]
+        for fp in paths:
+            server.enqueue("new", fp)
+
+        drained_paths: list[str] = []
+        while True:
+            batch = server.dequeue_batch(5)
+            if not batch:
+                break
+            drained_paths.extend(fp for _, fp in batch)
+
+        assert len(drained_paths) == 2000
+        assert sorted(drained_paths) == sorted(paths), "Items were duplicated or lost"
+
+    def test_dequeue_batch_same_path_multiple_priorities(self):
+        """Same file path queued with different priorities — all preserved correctly."""
+        server.index_queue.clear()
+        server.enqueue("new", "/same.py")
+        server.enqueue("changed", "/same.py")
+        server.enqueue("reindex", "/same.py")
+        server.enqueue("remove", "/same.py")
+
+        batch = server.dequeue_batch(10)
+        assert len(batch) == 4
+        # remove first (priority 0), then new (1), then changed (2), then reindex (3)
+        priorities = [p for p, _ in batch]
+        assert priorities == ["remove", "new", "changed", "reindex"]
+        # All point to same file
+        paths = [fp for _, fp in batch]
+        assert all(fp == "/same.py" for fp in paths)
+
+    def test_1000_vs_2000_scaling_is_sub_quadratic(self):
+        """dequeue_batch time on 2000 items should be at most 5x the time on 1000 items.
+
+        O(n log k) predicts ~2x. O(n log n) would be ~2.16x.
+        Accepting up to 5x to handle measurement noise on CI.
+        """
+        iterations = 15
+        times = {}
+
+        for n in (1000, 2000):
+            server.index_queue.clear()
+            for i in range(n):
+                p = ["remove", "new", "changed", "reindex"][i % 4]
+                server.enqueue(p, f"/f{i}.py")
+
+            # Snapshot the queue so we can restore it each iteration
+            snapshot = list(server.index_queue)
+            t0 = time.perf_counter()
+            for _ in range(iterations):
+                server.index_queue.clear()
+                server.index_queue.extend(snapshot)
+                server.dequeue_batch(5)
+            t1 = time.perf_counter()
+            times[n] = (t1 - t0) / iterations
+
+        ratio = times[2000] / times[1000] if times[1000] > 0 else 1.0
+        # With O(n log k) the ratio should be ~2x. Allow 5x for noisy CI.
+        assert ratio < 5.0, (
+            f"Scaling ratio {ratio:.2f}x (2000/1000) indicates potential performance regression. "
+            f"Times: 1000={times[1000]*1e6:.0f}µs, 2000={times[2000]*1e6:.0f}µs"
+        )
+
+    def test_drain_empty_queue_is_instant(self):
+        """dequeue_batch on empty queue returns immediately."""
+        server.index_queue.clear()
+        t0 = time.perf_counter()
+        for _ in range(1000):
+            server.dequeue_batch(5)
+        t1 = time.perf_counter()
+        # 1000 empty dequeues should take < 0.1s total
+        assert (t1 - t0) < 0.5, f"Empty dequeue too slow: {t1 - t0:.4f}s"

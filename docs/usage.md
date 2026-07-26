@@ -11,19 +11,21 @@
 Queue a directory for background indexing.
 
 ```
-index_directory(directory_path: str) → str
+index_directory(directory_path: str, respect_gitignore: bool = True) → str
 ```
 
 **Parameters:**
 
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `directory_path` | `string` | Yes | Absolute path to the directory to index |
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `directory_path` | `string` | Yes | — | Absolute path to the directory to index |
+| `respect_gitignore` | `boolean` | No | `True` | Whether to skip files matched by `.gitignore` rules |
 
 **Returns:** A human-readable status string describing what was queued.
 
 **Behavior:**
-- Scans the directory recursively for supported files (`.py`, `.rs`, `.md`, `.txt`)
+- Scans the directory recursively for supported files (`.py`, `.rs`, `.md`, `.txt`, `.js`, `.ts`, `.go`, `.toml`, `.json`, `.yaml`, `.yml`)
+- Respects `.gitignore` files by default (walks up directory tree to find all `.gitignore` files)
 - Compares against `meta.json` to detect new, changed, and removed files
 - Enqueues files for background processing
 - Returns immediately — actual embedding happens in batches
@@ -41,15 +43,6 @@ index_directory(directory_path: str) → str
 → index_directory("/nonexistent/path")
   Error: Directory '/nonexistent/path' not found.
 ```
-
-**Supported file types:**
-
-| Extension | Language |
-|---|---|
-| `.py` | Python |
-| `.rs` | Rust |
-| `.md` | Markdown |
-| `.txt` | Plain text |
 
 ---
 
@@ -110,9 +103,57 @@ search_codebase(query: str, k: int = 3) → str
 
 ---
 
+### `keyword_search`
+
+Exact keyword match across indexed file contents.
+
+```
+keyword_search(keyword: str, file_extension_filter: str = "") → str
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `keyword` | `string` | Yes | — | Keyword to search for (case-insensitive) |
+| `file_extension_filter` | `string` | No | `""` | Filter results to a specific extension (e.g., `".py"`) |
+
+**Returns:** Matched lines with file paths and line numbers. Capped at 30 results.
+
+**Behavior:**
+- Searches raw stored content (not semantic vectors)
+- Case-insensitive matching
+- Optional file extension filter
+- Shows matching lines with line numbers
+
+---
+
+### `update_file_index`
+
+Re-index a single file immediately. Useful after editing a file.
+
+```
+update_file_index(file_path: str) → str
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `file_path` | `string` | Yes | Absolute path to the file to re-index |
+
+**Returns:** Confirmation message or error.
+
+**Behavior:**
+- Embeds and indexes the file immediately (not queued)
+- Persists index to disk after indexing
+- Replaces any existing entry for the same file
+
+---
+
 ### `get_index_stats`
 
-Return current index health and statistics.
+Return current index health and statistics. Always instant — never loads the model.
 
 ```
 get_index_stats() → str
@@ -140,6 +181,48 @@ get_index_stats() → str
   - Worker: idle (0 queued, 47 processed, 0 errors)
   - Model loaded: True
 ```
+
+---
+
+### `drop_index`
+
+Clear the entire index from memory and disk.
+
+```
+drop_index() → str
+```
+
+**Parameters:** None
+
+**Returns:** `"Index cleared."`
+
+**Behavior:**
+- Clears all vectors, metadata, and store
+- Resets the turbovec index
+- Persists the empty state to disk
+
+---
+
+### `read_file_content`
+
+Read the full content of a file from disk (not from the index).
+
+```
+read_file_content(file_path: str) → str
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `file_path` | `string` | Yes | Absolute path to the file to read |
+
+**Returns:** Full file content as a string.
+
+**Behavior:**
+- Reads directly from disk (not from the indexed store)
+- Returns the complete file contents
+- Useful for viewing files without leaving the MCP context
 
 ---
 
@@ -193,7 +276,7 @@ Detailed statistics as a JSON document. Also lightweight — never loads the mod
 | `state` | `string` | `"idle"` or `"indexing"` |
 | `processed` | `integer` | Total files processed since server start |
 | `errors` | `integer` | Total indexing errors since server start |
-| `last_error` | `string|null` | Most recent error message |
+| `last_error` | `string\|null` | Most recent error message |
 | `model_loaded` | `boolean` | Whether the embedding model has been loaded |
 | `model` | `string` | The embedding model name |
 
@@ -230,6 +313,24 @@ Detailed statistics as a JSON document. Also lightweight — never loads the mod
 4. AI can search across both projects simultaneously
 ```
 
+### Gitignore-Aware Indexing
+
+```
+1. AI calls index_directory("/project", respect_gitignore=True) [default]
+2. Server loads .gitignore files from the directory tree upward
+3. Files matching gitignore patterns are skipped
+4. Use respect_gitignore=False to index everything including gitignored files
+```
+
+### Single-File Update
+
+```
+1. User edits a file
+2. AI calls update_file_index("/path/to/file.py")
+3. File is re-indexed immediately (no queue delay)
+4. Search results reflect the updated content
+```
+
 ---
 
 ## Expected Latency
@@ -241,8 +342,29 @@ Detailed statistics as a JSON document. Also lightweight — never loads the mod
 | `get_index_stats()` | < 1ms | < 1ms |
 | `index_directory` (scan only) | ~50ms | ~50ms |
 | `search_codebase` | ~5s (model load) | ~200ms |
+| `update_file_index` | ~400ms | ~400ms |
+| `keyword_search` | < 10ms | < 10ms |
+| `read_file_content` | file size dependent | file size dependent |
+| `drop_index` | < 10ms | < 10ms |
 | Background worker (per file) | ~400ms | ~400ms |
 | Idle shutdown | — | 30 minutes after last activity |
+
+---
+
+## Supported File Types
+
+| Extension | Language |
+|---|---|
+| `.py` | Python |
+| `.rs` | Rust |
+| `.md` | Markdown |
+| `.txt` | Plain text |
+| `.js` | JavaScript |
+| `.ts` | TypeScript |
+| `.go` | Go |
+| `.toml` | TOML config |
+| `.json` | JSON |
+| `.yaml`, `.yml` | YAML |
 
 ---
 
